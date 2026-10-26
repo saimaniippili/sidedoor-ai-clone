@@ -32,7 +32,7 @@ from telegram.ext import (
 from app.config import config
 from app.database.session import SessionLocal, init_db
 from app.database.models import (
-    Company, Founder, Opportunity, Outreach, ChatHistory, ActiveUser, ScheduledFollowup
+    Company, Founder, Opportunity, Outreach, ChatHistory, ActiveUser, ScheduledFollowup, SuppressionRecord
 )
 from app.discovery.startup_filter import StartupFilter
 from app.matching.project_registry import get_project, VerifiedProject, list_all_projects
@@ -105,7 +105,6 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE)
         avoid_names = {c.name.lower() for c in past_companies if c.name}
         
         # Load all suppressed domains and emails from SuppressionRecord & Founders
-        from app.database.models import SuppressionRecord
         suppression_records = db.query(SuppressionRecord).all()
         avoid_domains.update({s.domain.lower() for s in suppression_records if s.domain})
         avoid_emails = {s.email.lower() for s in suppression_records if s.email}
