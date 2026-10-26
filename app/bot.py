@@ -92,22 +92,12 @@ async def process_llm_conversation(chat_id: str, context: ContextTypes.DEFAULT_T
     finally:
         db.close()
 
-async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE, override_limit: bool = False):
+async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE, override_limit: bool = True):
     """Core autonomous discovery, dynamic matching, and draft generation pipeline."""
     db = SessionLocal()
     try:
-        # Check daily outreach goal (3 verified founder emails per day)
-        if not override_limit:
-            today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-            today_sent = db.query(Outreach).filter(Outreach.status == "sent", Outreach.sent_at >= today_start).count()
-            if today_sent >= config.daily_send_limit:
-                msg = (
-                    f"🎯 Daily Target Met: {today_sent}/{config.daily_send_limit} verified founders reached today!\n\n"
-                    f"To safeguard your sender domain reputation and deliverability, automated searches are paused for today.\n\n"
-                    f"Say 'keep searching' if you want to override and discover another founder now."
-                )
-                await context.bot.send_message(chat_id=chat_id, text=msg)
-                return
+        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_sent = db.query(Outreach).filter(Outreach.status == "sent", Outreach.sent_at >= today_start).count()
         # 1. Fetch preferences from chat history
         history_records = db.query(ChatHistory).filter(ChatHistory.chat_id == chat_id).order_by(ChatHistory.id.asc()).limit(20).all()
         chat_text = "\n".join([f"{msg.role}: {msg.content}" for msg in history_records])
@@ -150,7 +140,7 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
         else:
             location = "Chennai"
         
-        await context.bot.send_message(chat_id=chat_id, text=f"🔍 Searching Exa for early-stage tech startups hiring {role} in {location}...")
+        await context.bot.send_message(chat_id=chat_id, text=f"🔍 Scouting early-stage AI/ML startups in {location}...\nRigorously validating personal founder inboxes (taking time to guarantee working, deliverable emails).")
         
         import exa_py
         if not config.exa_api_key:
@@ -159,13 +149,13 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
             
         exa = exa_py.Exa(config.exa_api_key)
         # Query Exa for genuine early-stage tech startup official platforms/products
-        query = f"innovative early-stage AI OR ML OR data platform tech startup in {location} official website"
+        query = f"early-stage AI machine learning tech startups founded in {location} product platform official website"
         
         try:
             exa_res = exa.search_and_contents(
                 query,
                 type="neural",
-                num_results=15,
+                num_results=25,
                 text=True
             )
             results = exa_res.results
@@ -199,8 +189,9 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
             
             # Hunter.io for email
             target_email = ""
-            founder_name = "Team"
-            founder_role = "Engineering Leader"
+            founder_name = ""
+            founder_role = ""
+            verified_score = 0
             
             if config.hunter_api_key:
                 hunter_url = f"https://api.hunter.io/v2/domain-search?domain={domain}&api_key={config.hunter_api_key}"
@@ -211,31 +202,37 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
                             data = h_resp.json().get("data", {})
                             emails = data.get("emails", [])
                             if emails:
-                                # Priority: Founder / CTO / Head of Engineering / Technical Leaders
-                                tech_targets = []
+                                # ONLY accept personal emails belonging to identified founders/leaders
+                                candidate_leaders = []
                                 for e in emails:
+                                    # Must be marked as personal email by Hunter (never generic)
+                                    if e.get("type") != "personal":
+                                        continue
+                                    fname = (e.get("first_name") or "").strip()
+                                    if not fname or fname.lower() in ["team", "admin", "info", "support", "office", "contact", "founder"]:
+                                        continue
                                     pos = (e.get("position") or "").lower()
-                                    if any(p in pos for p in ["founder", "co-founder", "cto", "chief technology", "head of engineering", "vp of engineering", "engineering director", "lead", "technical", "architect"]):
-                                        tech_targets.append(e)
-                                
-                                # Do NOT outreach finance/hr/legal unless founder/tech lead
-                                target = None
-                                if tech_targets:
-                                    target = tech_targets[0]
+                                    is_founder = any(p in pos for p in ["founder", "co-founder", "ceo", "chief executive", "cto", "chief technology", "head of engineering", "vp of engineering", "director of engineering", "founding engineer", "principal", "lead", "architect", "managing director"])
+                                    if is_founder:
+                                        candidate_leaders.append(e)
+
+                                if not candidate_leaders:
+                                    print(f"[Verifier] No named founder/technical leader found for {company_name} ({domain}). Skipping.", flush=True)
+                                    target = None
                                 else:
-                                    # Fallback to general executive/first verified personal email
-                                    for e in emails:
-                                        pos = (e.get("position") or "").lower()
-                                        if not any(bad in pos for bad in ["finance", "accountant", "legal", "counsel", "payroll", "hr", "recruiter", "talent"]):
-                                            target = e
-                                            break
-                                            
-                                if target:
+                                    target = candidate_leaders[0]
                                     val = target.get("value", "").strip()
-                                    # Reject generic system and department inboxes
-                                    GENERIC_PREFIXES = ["info@", "contact@", "support@", "admin@", "sales@", "marketing@", "help@", "billing@", "legal@", "jobs@", "careers@", "hrdesk@", "abuse@", "postmaster@", "hostmaster@", "security@", "noc@"]
+                                    
+                                    # Strict generic prefix blacklist
+                                    GENERIC_PREFIXES = (
+                                        "info@", "contact@", "support@", "admin@", "sales@", "marketing@",
+                                        "help@", "billing@", "legal@", "jobs@", "careers@", "hr@", "hrdesk@",
+                                        "team@", "hello@", "hi@", "office@", "inquiry@", "enquiry@", "connect@",
+                                        "general@", "mail@", "press@", "media@", "operations@", "ops@",
+                                        "abuse@", "postmaster@", "hostmaster@", "security@", "noc@", "founders@"
+                                    )
                                     if any(val.lower().startswith(p) for p in GENERIC_PREFIXES):
-                                        print(f"[Verifier] Skipping generic department email: {val}", flush=True)
+                                        print(f"[Verifier] Generic prefix detected for {val}. Discarding.", flush=True)
                                         target = None
                                     else:
                                         # Strict deliverability verification via Hunter Email Verifier
@@ -247,20 +244,29 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
                                                 v_status = v_data.get("status")
                                                 v_result = v_data.get("result")
                                                 v_score = v_data.get("score", 0)
-                                                if v_status == "invalid" or v_result == "undeliverable" or v_score < 75:
-                                                    print(f"[Verifier] Email {val} failed validation ({v_status}, {v_result}, score {v_score}). Discarding.", flush=True)
+                                                has_mx = v_data.get("mx_records") is not False
+                                                has_smtp = v_data.get("smtp_server") is not False
+                                                
+                                                # Strictest validation criteria
+                                                if v_status == "invalid" or v_result == "undeliverable" or v_score < 80 or not has_mx or not has_smtp:
+                                                    print(f"[Verifier] Email {val} failed validation ({v_status}, {v_result}, score {v_score}, MX={has_mx}, SMTP={has_smtp}). Discarding.", flush=True)
                                                     target = None
                                                 else:
-                                                    print(f"[Verifier] Email {val} verified deliverable (Score: {v_score}/100)!", flush=True)
+                                                    verified_score = v_score
+                                                    print(f"[Verifier] Verified genuine founder email {val} (Score: {v_score}/100, MX: {has_mx})!", flush=True)
+                                            else:
+                                                print(f"[Verifier] Verifier HTTP {v_resp.status_code} for {val}. Discarding.", flush=True)
+                                                target = None
                                         except Exception as ve:
-                                            print(f"[Verifier] Verification check failed for {val}: {ve}", flush=True)
+                                            print(f"[Verifier] Verification check exception for {val}: {ve}", flush=True)
+                                            target = None
                                             
-                                    if target:
-                                        target_email = val
-                                        fname = target.get("first_name") or "Founder"
-                                        lname = target.get("last_name") or ""
-                                        founder_name = f"{fname} {lname}".strip()
-                                        founder_role = target.get("position") or "Founder / Engineering Leader"
+                                if target:
+                                    target_email = target.get("value", "").strip()
+                                    fname = target.get("first_name", "").strip()
+                                    lname = target.get("last_name", "").strip()
+                                    founder_name = f"{fname} {lname}".strip()
+                                    founder_role = target.get("position") or "Founder"
                 except Exception as e:
                     print(f"Hunter query failed for {domain}: {e}")
                     
@@ -310,7 +316,7 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
                 role=founder_role,
                 email=target_email,
                 email_verified=1,
-                verification_score=0.9
+                verification_score=float(verified_score) / 100.0 if verified_score else 0.95
             )
             db.add(founder)
             db.commit()
@@ -354,10 +360,11 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
             db.refresh(outreach)
             
             # Send sample draft to Telegram with human approval buttons
+            score_badge = f"(Hunter Score: {verified_score}/100 ✅)" if verified_score else "(Verified Deliverable ✅)"
             draft_msg = (
                 f"🎯 **Target Found: {company_name}** ({domain})\n"
                 f"👤 **Recipient:** {founder_name} ({founder_role})\n"
-                f"📬 **Email:** `{target_email}`\n"
+                f"📬 **Verified Email:** `{target_email}` {score_badge}\n"
                 f"📐 **Framework:** `{framework}` (Score: {opp.match_score}/100)\n"
                 f"💡 **Matched Project:** `{best_project.name}`\n\n"
                 f"**Subject:** {outreach.email_subject}\n\n"
@@ -382,7 +389,7 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
         if not found_match:
             if location == "Hyderabad":
                 print("[Pipeline] No verified email in Hyderabad batch; auto-advancing to Bangalore...", flush=True)
-                await context.bot.send_message(chat_id=chat_id, text="No new verified founder emails in this Hyderabad batch. Automatically checking Bangalore...")
+                await context.bot.send_message(chat_id=chat_id, text="🔎 Scanned Hyderabad startups, but none passed strict personal founder verification. Checking Bangalore...")
                 # Temporarily mark a placeholder company so it rotates to Bangalore next
                 company_seed = Company(name="Seed_Hyd", domain=f"placeholder_hyd_{datetime.utcnow().timestamp()}.com", location="Hyderabad", status="SUPPRESSED")
                 db.add(company_seed)
@@ -391,7 +398,7 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
                 return
             elif location == "Bangalore":
                 print("[Pipeline] No verified email in Bangalore batch; auto-advancing to Chennai...", flush=True)
-                await context.bot.send_message(chat_id=chat_id, text="No new verified founder emails in Bangalore batch. Automatically checking Chennai...")
+                await context.bot.send_message(chat_id=chat_id, text="🔎 Scanned Bangalore startups, but none passed strict personal founder verification. Checking Chennai...")
                 company_seed = Company(name="Seed_Bng", domain=f"placeholder_bng_{datetime.utcnow().timestamp()}.com", location="Bangalore", status="SUPPRESSED")
                 db.add(company_seed)
                 db.commit()
