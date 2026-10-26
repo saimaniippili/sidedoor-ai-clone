@@ -150,6 +150,7 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE)
                 text=True
             )
             results = exa_res.results
+            print(f"[Pipeline] Exa found {len(results)} potential startups in {location}", flush=True)
         except Exception as e:
             await context.bot.send_message(chat_id=chat_id, text=f"Exa search failed: {e}")
             return
@@ -173,6 +174,7 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE)
             raw_name = StartupFilter.normalize_company_name(res.title or domain)
             company_name = raw_name if raw_name.lower() not in ["about", "home", "index", "welcome", "platform"] else domain.split('.')[0].capitalize()
             research_text = res.text[:3000] if res.text else "Early stage technology company."
+            print(f"[Pipeline] Checking {company_name} ({domain})...", flush=True)
             
             # Hunter.io for email
             target_email = ""
@@ -322,7 +324,12 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE)
                     InlineKeyboardButton("❌ Skip", callback_data=f"skip_{outreach.id}")
                 ]
             ]
-            await context.bot.send_message(chat_id=chat_id, text=draft_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+            try:
+                await context.bot.send_message(chat_id=chat_id, text=draft_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+            except Exception as send_err:
+                print(f"[Telegram] Markdown send failed ({send_err}); sending plain text fallback", flush=True)
+                await context.bot.send_message(chat_id=chat_id, text=draft_msg, reply_markup=InlineKeyboardMarkup(keyboard))
+            print(f"[Pipeline] Draft sent to user {chat_id}!", flush=True)
             found_match = True
             break
             
@@ -337,7 +344,7 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE)
             )
             await context.bot.send_message(chat_id=chat_id, text=breakdown)
     except Exception as e:
-        print(f"Error in pipeline: {e}")
+        print(f"Error in pipeline: {e}", flush=True)
         await context.bot.send_message(chat_id=chat_id, text=f"Search pipeline encountered an issue: {e}")
     finally:
         db.close()
