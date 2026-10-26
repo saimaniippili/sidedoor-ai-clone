@@ -510,7 +510,10 @@ def main():
     app = Application.builder().token(config.telegram_bot_token).build()
     
     # Schedule hourly background follow-up worker
-    app.job_queue.run_repeating(periodic_followup_job, interval=3600, first=60)
+    if app.job_queue:
+        app.job_queue.run_repeating(periodic_followup_job, interval=3600, first=60)
+    else:
+        print("WARNING: JobQueue not initialized")
     
     app.add_handler(CommandHandler("start", handle_start))
     app.add_handler(MessageHandler(filters.Document.PDF, handle_resume))
