@@ -19,8 +19,28 @@ class HealthHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
+def keep_alive_heartbeat():
+    import time
+    import urllib.request
+    url = os.environ.get("RENDER_EXTERNAL_URL", "https://sidedoor-ai-clone.onrender.com")
+    print(f"[KeepAlive] Initiating 24/7 anti-sleep heartbeat targeting {url}...", flush=True)
+    time.sleep(30)
+    while True:
+        try:
+            req = urllib.request.Request(
+                f"{url}/",
+                headers={"User-Agent": "RecruiterCopilot-Heartbeat/1.0"}
+            )
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                print(f"[KeepAlive] Heartbeat ping successful ({resp.status}) - Render container kept awake 24/7.", flush=True)
+        except Exception as e:
+            print(f"[KeepAlive] Heartbeat ping warning: {e}", flush=True)
+        # Ping every 8 minutes (Render free tier sleeps after 15 minutes of HTTP inactivity)
+        time.sleep(480)
+
 def start_health_server():
     port = int(os.environ.get("PORT", 8080))
+    threading.Thread(target=keep_alive_heartbeat, daemon=True).start()
     server = HTTPServer(("0.0.0.0", port), HealthHandler)
     server.serve_forever()
 
@@ -627,8 +647,14 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(button_callback))
     
-    print("Recruiter Copilot is running live! Waiting for updates...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    while True:
+        try:
+            print("Recruiter Copilot is running live on Render! Waiting for updates...")
+            app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=False)
+        except Exception as e:
+            print(f"[Bot Polling Notice]: {e}. Automatically resuming in 10s...", flush=True)
+            import time
+            time.sleep(10)
 
 if __name__ == "__main__":
     main()
