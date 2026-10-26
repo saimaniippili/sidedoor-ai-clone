@@ -24,22 +24,54 @@ class GmailManager:
     """
     
     @classmethod
+    def _find_file(cls, filename: str) -> Optional[str]:
+        # 1. Direct local path
+        if os.path.exists(filename):
+            return filename
+        # 2. Render Docker secret files mount path (/etc/secrets/<filename>)
+        render_path = os.path.join("/etc/secrets", filename)
+        if os.path.exists(render_path):
+            return render_path
+        # 3. /app directory path
+        app_path = os.path.join("/app", filename)
+        if os.path.exists(app_path):
+            return app_path
+        return None
+
+    @classmethod
     def get_credentials(cls) -> Optional[Credentials]:
-        if not os.path.exists(TOKEN_FILE):
+        token_path = cls._find_file(TOKEN_FILE)
+        if not token_path:
+            # Check environment variable fallback
+            token_env = os.environ.get("GMAIL_TOKEN_JSON") or os.environ.get("TOKEN_JSON")
+            if token_env:
+                try:
+                    token_info = json.loads(token_env)
+                    creds = Credentials.from_authorized_user_info(token_info, SCOPES)
+                    if creds and creds.expired and creds.refresh_token:
+                        creds.refresh(Request())
+                    return creds if (creds and creds.valid) else None
+                except Exception as e:
+                    print(f"[GmailManager] Error parsing GMAIL_TOKEN_JSON env var: {e}", flush=True)
+            print(f"[GmailManager] token.json not found in ., /etc/secrets, or /app", flush=True)
             return None
+            
         try:
-            creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+            creds = Credentials.from_authorized_user_file(token_path, SCOPES)
             if creds and creds.expired and creds.refresh_token:
                 try:
                     creds.refresh(Request())
-                    with open(TOKEN_FILE, "w", encoding="utf-8") as token:
-                        token.write(creds.to_json())
+                    try:
+                        with open(TOKEN_FILE, "w", encoding="utf-8") as token:
+                            token.write(creds.to_json())
+                    except Exception:
+                        pass
                 except RefreshError as e:
-                    print(f"[GmailManager] Refresh token expired or revoked: {e}")
+                    print(f"[GmailManager] Refresh token expired or revoked: {e}", flush=True)
                     return None
             return creds if (creds and creds.valid) else None
         except Exception as e:
-            print(f"[GmailManager] Error reading token.json: {e}")
+            print(f"[GmailManager] Error reading token file {token_path}: {e}", flush=True)
             return None
 
     @classmethod
