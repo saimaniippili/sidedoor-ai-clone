@@ -101,7 +101,15 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE)
         chat_text = "\n".join([f"{msg.role}: {msg.content}" for msg in history_records])
         
         past_companies = db.query(Company).all()
-        avoid_domains = {c.domain for c in past_companies}
+        avoid_domains = {c.domain.lower() for c in past_companies if c.domain}
+        avoid_names = {c.name.lower() for c in past_companies if c.name}
+        
+        # Load all suppressed domains and emails from SuppressionRecord & Founders
+        from app.database.models import SuppressionRecord
+        suppression_records = db.query(SuppressionRecord).all()
+        avoid_domains.update({s.domain.lower() for s in suppression_records if s.domain})
+        avoid_emails = {s.email.lower() for s in suppression_records if s.email}
+        avoid_emails.update({f.email.lower() for f in db.query(Founder).all() if f.email})
         
         user = db.query(ActiveUser).filter(ActiveUser.chat_id == chat_id).first()
         cand_name = (user.candidate_name if user and user.candidate_name else "Saimani Ippili")
@@ -167,13 +175,15 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE)
                 skipped_aggregators += 1
                 continue
                 
-            if domain in avoid_domains:
-                skipped_seen += 1
-                continue
-                
             raw_name = StartupFilter.normalize_company_name(res.title or domain)
             company_name = raw_name if raw_name.lower() not in ["about", "home", "index", "welcome", "platform"] else domain.split('.')[0].capitalize()
             research_text = res.text[:3000] if res.text else "Early stage technology company."
+            
+            if domain.lower() in avoid_domains or company_name.lower() in avoid_names:
+                print(f"[Pipeline] Already processed/contacted {company_name} ({domain}) - skipping.", flush=True)
+                skipped_seen += 1
+                continue
+                
             print(f"[Pipeline] Checking {company_name} ({domain})...", flush=True)
             
             # Hunter.io for email
@@ -223,7 +233,7 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE)
                 except Exception as e:
                     print(f"Hunter query failed for {domain}: {e}")
                     
-            if not target_email:
+            if not target_email or target_email.lower() in avoid_emails:
                 skipped_no_email += 1
                 continue
                 
@@ -484,6 +494,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 outreach.gmail_thread_id = send_res.get("thread_id") if send_res else None
                 db.commit()
                 
+                # Permanently suppress company domain and founder email so they never re-appear
+                if company and not db.query(SuppressionRecord).filter(SuppressionRecord.domain == company.domain).first():
+                    db.add(SuppressionRecord(domain=company.domain, email=founder.email, reason="contacted"))
+                    db.commit()
+
                 # Automatically schedule Day 3 and Day 7 follow-up sequence in database
                 best_project = get_project(json.loads(outreach.selected_project_ids or "[]")[0]) or get_project("datachat")
                 FollowupService.schedule_sequence(db, outreach, best_project)
@@ -503,6 +518,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
         elif action == "skip":
             outreach.status = "skipped"
+            if company and not db.query(SuppressionRecord).filter(SuppressionRecord.domain == company.domain).first():
+                db.add(SuppressionRecord(domain=company.domain, email=founder.email if founder else None, reason="skipped"))
             db.commit()
             await query.edit_message_text(f"Skipped {company.name}. Hunting for the next match...")
             asyncio.create_task(run_startup_pipeline(str(query.message.chat_id), context))
