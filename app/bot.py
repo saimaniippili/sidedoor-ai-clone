@@ -334,15 +334,29 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE)
             break
             
         if not found_match:
-            breakdown = (
-                f"Searched Exa batch, but couldn't find a direct founder match.\n\n"
-                f"📊 **Breakdown:**\n"
-                f"- Aggregators filtered out: {skipped_aggregators}\n"
-                f"- Previously contacted: {skipped_seen}\n"
-                f"- No verified public email: {skipped_no_email}\n\n"
-                f"Say 'keep searching' to pull the next set!"
-            )
-            await context.bot.send_message(chat_id=chat_id, text=breakdown)
+            if location == "Hyderabad":
+                print("[Pipeline] No verified email in Hyderabad batch; auto-advancing to Bangalore...", flush=True)
+                await context.bot.send_message(chat_id=chat_id, text="No new verified founder emails in this Hyderabad batch. Automatically checking Bangalore...")
+                # Temporarily mark a placeholder company so it rotates to Bangalore next
+                company_seed = Company(name="Seed_Hyd", domain=f"placeholder_hyd_{datetime.utcnow().timestamp()}.com", location="Hyderabad", status="SUPPRESSED")
+                db.add(company_seed)
+                db.commit()
+                asyncio.create_task(run_startup_pipeline(chat_id, context))
+                return
+            elif location == "Bangalore":
+                print("[Pipeline] No verified email in Bangalore batch; auto-advancing to Chennai...", flush=True)
+                await context.bot.send_message(chat_id=chat_id, text="No new verified founder emails in Bangalore batch. Automatically checking Chennai...")
+                company_seed = Company(name="Seed_Bng", domain=f"placeholder_bng_{datetime.utcnow().timestamp()}.com", location="Bangalore", status="SUPPRESSED")
+                db.add(company_seed)
+                db.commit()
+                asyncio.create_task(run_startup_pipeline(chat_id, context))
+                return
+            else:
+                breakdown = (
+                    f"Searched candidate batches across Hyderabad, Bangalore & Chennai, but all current results lacked verified public founder emails.\n\n"
+                    f"Say 'keep searching' to trigger another search cycle!"
+                )
+                await context.bot.send_message(chat_id=chat_id, text=breakdown)
     except Exception as e:
         print(f"Error in pipeline: {e}", flush=True)
         await context.bot.send_message(chat_id=chat_id, text=f"Search pipeline encountered an issue: {e}")
@@ -475,12 +489,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 FollowupService.schedule_sequence(db, outreach, best_project)
                 
                 await query.edit_message_text(
-                    f"🚀 **Email Sent to {founder.email} ({company.name})!**\n\n"
-                    f"📅 **Automated Follow-up Sequence Scheduled:**\n"
+                    f"🚀 Email Sent to {founder.email} ({company.name})!\n\n"
+                    f"📅 Automated Follow-up Sequence Scheduled:\n"
                     f"- Day 3: Technical Value-Add Follow-up\n"
                     f"- Day 7: Soft Break-Up Final Follow-up\n"
-                    f"*(Will automatically cancel if they reply!)*"
+                    f"*(Will automatically cancel if they reply!)*\n\n"
+                    f"🔍 Autonomous mode: Hunting down your next target now..."
                 )
+                # Automatically search for the next startup without waiting for user prompt
+                asyncio.create_task(run_startup_pipeline(str(query.message.chat_id), context))
             else:
                 await query.edit_message_text("❌ Failed to send via Gmail. Check your credentials.")
                 
