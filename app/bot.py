@@ -279,9 +279,9 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
                             prompt = (
                                 f"Analyze the text about '{company_name}' ({domain}):\n\n"
                                 f"{combined_text}\n\n"
-                                f"Extract the primary founder, co-founder, CEO, or CTO.\n"
-                                f"Return ONLY JSON: {{"first_name": "...", "last_name": "...", "role": "..."}}\n"
-                                f"If no real person is found, return {{"first_name": null}}"
+                                "Extract the primary founder, co-founder, CEO, or CTO.\n"
+                                "Return ONLY JSON: {\"first_name\": \"...\", \"last_name\": \"...\", \"role\": \"...\"}\n"
+                                "If no real person is found, return {\"first_name\": null}"
                             )
                             raw_ai = await llm_router.complete(prompt, temperature=0.1)
                             import re
