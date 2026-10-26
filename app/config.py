@@ -21,7 +21,7 @@ class AppConfig(BaseSettings):
     database_url: str = "sqlite:///./backdoor.db"
     
     # Email Sending & Limits
-    daily_send_limit: int = 5
+    daily_send_limit: int = 3
     dry_run: bool = False
     global_pause: bool = False
     

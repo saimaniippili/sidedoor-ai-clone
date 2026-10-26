@@ -92,10 +92,22 @@ async def process_llm_conversation(chat_id: str, context: ContextTypes.DEFAULT_T
     finally:
         db.close()
 
-async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE):
+async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE, override_limit: bool = False):
     """Core autonomous discovery, dynamic matching, and draft generation pipeline."""
     db = SessionLocal()
     try:
+        # Check daily outreach goal (3 verified founder emails per day)
+        if not override_limit:
+            today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+            today_sent = db.query(Outreach).filter(Outreach.status == "sent", Outreach.sent_at >= today_start).count()
+            if today_sent >= config.daily_send_limit:
+                msg = (
+                    f"🎯 Daily Target Met: {today_sent}/{config.daily_send_limit} verified founders reached today!\n\n"
+                    f"To safeguard your sender domain reputation and deliverability, automated searches are paused for today.\n\n"
+                    f"Say 'keep searching' if you want to override and discover another founder now."
+                )
+                await context.bot.send_message(chat_id=chat_id, text=msg)
+                return
         # 1. Fetch preferences from chat history
         history_records = db.query(ChatHistory).filter(ChatHistory.chat_id == chat_id).order_by(ChatHistory.id.asc()).limit(20).all()
         chat_text = "\n".join([f"{msg.role}: {msg.content}" for msg in history_records])
@@ -219,16 +231,36 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE)
                                             break
                                             
                                 if target:
-                                    val = target.get("value", "")
-                                    # Never send to generic system/spam/abuse inboxes
-                                    if any(bad in val.lower() for bad in ["abuse@", "postmaster@", "hostmaster@", "admin@", "security@", "noc@"]):
+                                    val = target.get("value", "").strip()
+                                    # Reject generic system and department inboxes
+                                    GENERIC_PREFIXES = ["info@", "contact@", "support@", "admin@", "sales@", "marketing@", "help@", "billing@", "legal@", "jobs@", "careers@", "hrdesk@", "abuse@", "postmaster@", "hostmaster@", "security@", "noc@"]
+                                    if any(val.lower().startswith(p) for p in GENERIC_PREFIXES):
+                                        print(f"[Verifier] Skipping generic department email: {val}", flush=True)
                                         target = None
                                     else:
+                                        # Strict deliverability verification via Hunter Email Verifier
+                                        try:
+                                            verifier_url = f"https://api.hunter.io/v2/email-verifier?email={val}&api_key={config.hunter_api_key}"
+                                            v_resp = await client.get(verifier_url)
+                                            if v_resp.status_code == 200:
+                                                v_data = v_resp.json().get("data", {})
+                                                v_status = v_data.get("status")
+                                                v_result = v_data.get("result")
+                                                v_score = v_data.get("score", 0)
+                                                if v_status == "invalid" or v_result == "undeliverable" or v_score < 75:
+                                                    print(f"[Verifier] Email {val} failed validation ({v_status}, {v_result}, score {v_score}). Discarding.", flush=True)
+                                                    target = None
+                                                else:
+                                                    print(f"[Verifier] Email {val} verified deliverable (Score: {v_score}/100)!", flush=True)
+                                        except Exception as ve:
+                                            print(f"[Verifier] Verification check failed for {val}: {ve}", flush=True)
+                                            
+                                    if target:
                                         target_email = val
-                                    fname = target.get("first_name") or "Team"
-                                    lname = target.get("last_name") or ""
-                                    founder_name = f"{fname} {lname}".strip()
-                                    founder_role = target.get("position") or "Technical Leader"
+                                        fname = target.get("first_name") or "Founder"
+                                        lname = target.get("last_name") or ""
+                                        founder_name = f"{fname} {lname}".strip()
+                                        founder_role = target.get("position") or "Founder / Engineering Leader"
                 except Exception as e:
                     print(f"Hunter query failed for {domain}: {e}")
                     
@@ -400,7 +432,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if text.lower() in ["keep searching", "search", "more"]:
         await update.message.reply_text("Hunting down the next qualified startup... 🔍")
-        asyncio.create_task(run_startup_pipeline(chat_id, context))
+        asyncio.create_task(run_startup_pipeline(chat_id, context, override_limit=True))
         return
         
     db = SessionLocal()
