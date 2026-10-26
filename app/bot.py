@@ -1,3 +1,20 @@
+
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+    def log_message(self, format, *args):
+        pass
+
+def start_health_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    server.serve_forever()
+
 import os
 import io
 import json
@@ -482,6 +499,8 @@ async def periodic_followup_job(context: ContextTypes.DEFAULT_TYPE):
         db.close()
 
 def main():
+    threading.Thread(target=start_health_server, daemon=True).start()
+
     init_db()
     
     if not config.telegram_bot_token:
