@@ -267,6 +267,11 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE)
             db.commit()
             db.refresh(company)
             
+            # Immediately record in SuppressionRecord so it is NEVER processed or queried again
+            if not db.query(SuppressionRecord).filter(SuppressionRecord.domain == domain).first():
+                db.add(SuppressionRecord(domain=domain, email=target_email, reason="drafted"))
+                db.commit()
+            
             founder = Founder(
                 company_id=company.id,
                 name=founder_name,
