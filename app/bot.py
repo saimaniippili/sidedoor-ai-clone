@@ -280,48 +280,18 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
                                         except Exception as ve:
                                             print(f"[Hunter] Verification check failed for {val}: {ve}", flush=True)
                         elif h_resp.status_code == 429:
-                            print(f"[Hunter] Quota reached (HTTP 429). Activating AI Web & MX Engine.", flush=True)
+                            print(f"[Hunter] Monthly quota limit reached (HTTP 429).", flush=True)
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text=(
+                                    "⚠️ Hunter.io monthly free tier search quota is reached (0 searches remaining, resets on Oct 28).\n\n"
+                                    "🛡️ **Deliverability Safeguard:** To protect your Gmail sender reputation from email bounces (550 NoSuchUser), unverified email guessing is disabled.\n\n"
+                                    "🔑 **To continue discovering verified founders right now:** Simply create a free account at https://hunter.io with any email and paste your new API key here in the chat!"
+                                )
+                            )
+                            return
                 except Exception as e:
                     print(f"Hunter query failed for {domain}: {e}")
-
-            # 2. Resilient AI Web Intelligence & DNS MX Fallback (Active when Hunter has 0 emails or 429 quota)
-            if not target_email:
-                try:
-                    async with httpx.AsyncClient(timeout=6.0) as client:
-                        dns_url = f"https://dns.google/resolve?name={domain}&type=MX"
-                        dns_resp = await client.get(dns_url)
-                        if dns_resp.status_code == 200 and dns_resp.json().get("Answer"):
-                            # Domain has active corporate email servers (Google Workspace / Microsoft / etc.)
-                            f_query = f"{domain} founder OR CEO OR CTO OR \"co-founder\""
-                            f_res = exa.search_and_contents(f_query, num_results=3, text=True)
-                            combined_text = " ".join([r.text[:500] for r in f_res.results if r.text])
-                            
-                            prompt = (
-                                f"Analyze the text about '{company_name}' ({domain}):\n\n"
-                                f"{combined_text}\n\n"
-                                "Extract the primary founder, co-founder, CEO, or CTO.\n"
-                                "Return ONLY JSON: {\"first_name\": \"...\", \"last_name\": \"...\", \"role\": \"...\"}\n"
-                                "If no real person is found, return {\"first_name\": null}"
-                            )
-                            raw_ai = await llm_router.complete(prompt, temperature=0.1)
-                            import re
-                            m = re.search(r'\{.*\}', raw_ai, re.DOTALL)
-                            if m:
-                                f_data = json.loads(m.group(0))
-                                if f_data and f_data.get("first_name"):
-                                    fn = f_data["first_name"].strip().title()
-                                    ln = (f_data.get("last_name") or "").strip().title()
-                                    pos = f_data.get("role") or "Founder"
-                                    if fn.lower() not in ["team", "admin", "info", "founder", "contact", "about"]:
-                                        founder_name = f"{fn} {ln}".strip()
-                                        founder_role = pos
-                                        f_first = fn.lower()
-                                        f_last = ln.lower()
-                                        target_email = f"{f_first}.{f_last}@{domain}" if f_last else f"{f_first}@{domain}"
-                                        verified_score = 95
-                                        print(f"[AI Discovery] Discovered {founder_name} ({founder_role}) at {domain} -> {target_email} (MX Verified)!", flush=True)
-                except Exception as fe:
-                    print(f"[AI Discovery] Error for {domain}: {fe}", flush=True)
 
             if not target_email or target_email.lower() in avoid_emails:
                 skipped_no_email += 1
@@ -480,6 +450,32 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.message.chat_id)
     text = update.message.text.strip()
     
+    # Check if user sent a new Hunter API key (40 hex chars or starting with hunter_)
+    clean_key = text.strip()
+    if (len(clean_key) == 40 and all(c in "0123456789abcdefABCDEF" for c in clean_key)) or clean_key.startswith("hunter_"):
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                r = await client.get(f"https://api.hunter.io/v2/account?api_key={clean_key}")
+                if r.status_code == 200:
+                    d = r.json().get("data", {})
+                    searches = d.get("requests", {}).get("searches", {}).get("remaining", 0)
+                    config.hunter_api_key = clean_key
+                    await update.message.reply_text(
+                        f"🎉 New Hunter.io Key Activated!\n\n"
+                        f"Account: {d.get('email')}\n"
+                        f"Searches Available: {searches}\n\n"
+                        f"🔍 Resuming startup discovery now..."
+                    )
+                    asyncio.create_task(run_startup_pipeline(chat_id, context, override_limit=True))
+                    return
+                else:
+                    await update.message.reply_text("❌ Key test failed: That Hunter API key appears invalid or expired.")
+                    return
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error testing key: {e}")
+            return
+            
     if text.lower() in ["keep searching", "search", "more"]:
         await update.message.reply_text("Hunting down the next qualified startup... 🔍")
         asyncio.create_task(run_startup_pipeline(chat_id, context, override_limit=True))
@@ -562,13 +558,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         company = db.query(Company).filter(Company.id == opp.company_id).first()
         
         if action == "send":
+            clean_to = founder.email.strip().replace(" ", "") if founder and founder.email else ""
+            if not clean_to or "@" not in clean_to:
+                await query.edit_message_text(f"❌ Recipient email '{founder.email if founder else 'None'}' is invalid or empty. Skipped.")
+                return
+                
             # Check Gmail authentication
             if not GmailManager.is_authenticated() and not config.dry_run:
                 await query.edit_message_text("⚠️ Gmail is not authorized. Please generate token.json using `python generate_token.py` on your machine.")
                 return
                 
             send_res = GmailManager.send_email(
-                to_email=founder.email,
+                to_email=clean_to,
                 subject=outreach.email_subject,
                 body=outreach.email_body
             ) if not config.dry_run else {"message_id": "dry_run_id", "thread_id": "dry_run_thread"}

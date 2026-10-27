@@ -87,11 +87,22 @@ class GmailManager:
             print("[GmailManager] Cannot send: Gmail is not authorized or token expired.")
             return None
         
+        # Sanitize and validate recipient address (strictly reject spaces or invalid chars)
+        import re
+        if not to_email:
+            print("[GmailManager] Cannot send: to_email is empty.")
+            return None
+            
+        clean_email = to_email.strip().replace(" ", "")
+        if not re.match(r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$', clean_email):
+            print(f"[GmailManager] Cannot send: invalid email address '{to_email}'")
+            return None
+            
         try:
             service = build("gmail", "v1", credentials=creds)
             message = EmailMessage()
             message.set_content(body)
-            message["To"] = to_email
+            message["To"] = clean_email
             message["From"] = "me"
             message["Subject"] = subject
             
