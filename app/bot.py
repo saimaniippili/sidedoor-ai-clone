@@ -64,6 +64,7 @@ from app.database.models import (
     Company, Founder, Opportunity, Outreach, ChatHistory, ActiveUser, ScheduledFollowup, SuppressionRecord
 )
 from app.discovery.startup_filter import StartupFilter
+from app.discovery.email_engine import FounderEmailEngine
 from app.matching.project_registry import get_project, VerifiedProject, list_all_projects
 from app.matching.resume_parser import ResumeParser
 from app.matching.project_scorer import ProjectScorer
@@ -219,79 +220,25 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
                 
             print(f"[Pipeline] Checking {company_name} ({domain})...", flush=True)
             
-            target_email = ""
-            founder_name = ""
-            founder_role = ""
-            verified_score = 0
+            # 1. Multi-Tier Open-Source & API Founder Discovery Engine (Zero Bounces Standard)
+            verified_contact = await FounderEmailEngine.discover_and_verify(
+                company_name=company_name,
+                domain=domain,
+                research_text=research_text,
+                hunter_api_key=config.hunter_api_key
+            )
             
-            # 1. Try Hunter.io domain-search if API key configured
-            if config.hunter_api_key:
-                hunter_url = f"https://api.hunter.io/v2/domain-search?domain={domain}&api_key={config.hunter_api_key}"
-                try:
-                    async with httpx.AsyncClient(timeout=8.0) as client:
-                        h_resp = await client.get(hunter_url)
-                        if h_resp.status_code == 200:
-                            data = h_resp.json().get("data", {})
-                            emails = data.get("emails", [])
-                            if emails:
-                                candidate_leaders = []
-                                for e in emails:
-                                    if e.get("type") != "personal":
-                                        continue
-                                    fname = (e.get("first_name") or "").strip()
-                                    if not fname or fname.lower() in ["team", "admin", "info", "support", "office", "contact", "founder"]:
-                                        continue
-                                    pos = (e.get("position") or "").lower()
-                                    is_founder = any(p in pos for p in ["founder", "co-founder", "ceo", "chief executive", "cto", "chief technology", "head of engineering", "vp of engineering", "director of engineering", "founding engineer", "principal", "lead", "architect", "managing director"])
-                                    if is_founder:
-                                        candidate_leaders.append(e)
-
-                                if candidate_leaders:
-                                    target = candidate_leaders[0]
-                                    val = target.get("value", "").strip()
-                                    
-                                    GENERIC_PREFIXES = (
-                                        "info@", "contact@", "support@", "admin@", "sales@", "marketing@",
-                                        "help@", "billing@", "legal@", "jobs@", "careers@", "hr@", "hrdesk@",
-                                        "team@", "hello@", "hi@", "office@", "inquiry@", "enquiry@", "connect@",
-                                        "general@", "mail@", "press@", "media@", "operations@", "ops@",
-                                        "abuse@", "postmaster@", "hostmaster@", "security@", "noc@", "founders@"
-                                    )
-                                    if not any(val.lower().startswith(p) for p in GENERIC_PREFIXES):
-                                        try:
-                                            verifier_url = f"https://api.hunter.io/v2/email-verifier?email={val}&api_key={config.hunter_api_key}"
-                                            v_resp = await client.get(verifier_url)
-                                            if v_resp.status_code == 200:
-                                                v_data = v_resp.json().get("data", {})
-                                                v_status = v_data.get("status")
-                                                v_result = v_data.get("result")
-                                                v_score = v_data.get("score", 0)
-                                                has_mx = v_data.get("mx_records") is not False
-                                                has_smtp = v_data.get("smtp_server") is not False
-                                                
-                                                if v_status != "invalid" and v_result != "undeliverable" and v_score >= 80 and has_mx and has_smtp:
-                                                    target_email = val
-                                                    fname = target.get("first_name", "").strip()
-                                                    lname = target.get("last_name", "").strip()
-                                                    founder_name = f"{fname} {lname}".strip()
-                                                    founder_role = target.get("position") or "Founder"
-                                                    verified_score = v_score
-                                                    print(f"[Hunter] Verified email {val} (Score: {v_score}/100)!", flush=True)
-                                        except Exception as ve:
-                                            print(f"[Hunter] Verification check failed for {val}: {ve}", flush=True)
-                        elif h_resp.status_code == 429:
-                            print(f"[Hunter] Monthly quota limit reached (HTTP 429).", flush=True)
-                            await context.bot.send_message(
-                                chat_id=chat_id,
-                                text=(
-                                    "⚠️ Hunter.io monthly free tier search quota is reached (0 searches remaining, resets on Oct 28).\n\n"
-                                    "🛡️ **Deliverability Safeguard:** To protect your Gmail sender reputation from email bounces (550 NoSuchUser), unverified email guessing is disabled.\n\n"
-                                    "🔑 **To continue discovering verified founders right now:** Simply create a free account at https://hunter.io with any email and paste your new API key here in the chat!"
-                                )
-                            )
-                            return
-                except Exception as e:
-                    print(f"Hunter query failed for {domain}: {e}")
+            if not verified_contact:
+                print(f"[Pipeline] No verified deliverable email found for {company_name} ({domain}) - skipping to prevent bounces.", flush=True)
+                skipped_no_email += 1
+                continue
+                
+            target_email = verified_contact.email
+            founder_name = verified_contact.name
+            founder_role = verified_contact.role
+            verified_score = verified_contact.confidence_score
+            verification_source = verified_contact.verification_source
+            mx_provider = verified_contact.mx_provider
 
             if not target_email or target_email.lower() in avoid_emails:
                 skipped_no_email += 1
@@ -383,11 +330,12 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
             db.refresh(outreach)
             
             # Send sample draft to Telegram with human approval buttons
-            score_badge = f"(Hunter Score: {verified_score}/100 ✅)" if verified_score else "(MX Verified Deliverable ✅)"
+            score_badge = f"({verification_source} | MX: {mx_provider} | {verified_score}% Confidence 🛡️)"
             draft_msg = (
                 f"🎯 **Target Found: {company_name}** ({domain})\n"
                 f"👤 **Recipient:** {founder_name} ({founder_role})\n"
-                f"📬 **Verified Email:** `{target_email}` {score_badge}\n"
+                f"📬 **Deliverable Email:** `{target_email}`\n"
+                f"🛡️ **Verification:** {score_badge}\n"
                 f"📐 **Framework:** `{framework}` (Score: {opp.match_score}/100)\n"
                 f"💡 **Matched Project:** `{best_project.name}`\n\n"
                 f"**Subject:** {outreach.email_subject}\n\n"
