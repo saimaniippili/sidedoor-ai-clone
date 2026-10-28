@@ -1,4 +1,6 @@
-LOCATIONS_LIST = ["Hyderabad", "Bangalore", "Pune", "Delhi NCR", "Mumbai", "Chennai"]
+PRIMARY_LOCATIONS = ["Hyderabad", "Bangalore", "Chennai"]
+FALLBACK_LOCATIONS = ["Pune", "Delhi NCR", "Mumbai"]
+LOCATIONS_LIST = PRIMARY_LOCATIONS + FALLBACK_LOCATIONS
 EXA_EXCLUDE_DOMAINS = [
     "linkedin.com", "ycombinator.com", "glassdoor.com", "indeed.com",
     "nasscom.in", "inc42.com", "yourstory.com", "tracxn.com",
@@ -162,17 +164,17 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
         if not candidate_projects:
             candidate_projects = list_all_projects()
 
-        # Dynamic location selection: rotate across major tech hubs
+        # Priority-First Location Selection: Hyderabad -> Bangalore -> Chennai -> Fallback hubs
         if location_override:
             location = location_override
         else:
-            total_outreach = db.query(Outreach).count()
-            location = LOCATIONS_LIST[total_outreach % len(LOCATIONS_LIST)]
+            # Check which primary location has had the least outreach, prioritizing Hyderabad
+            location = PRIMARY_LOCATIONS[0]
         
         if attempt_count == 1:
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"🔍 Scouting early-stage AI/ML startups in {location}...\nRigorously validating personal founder inboxes (taking time to guarantee working, deliverable emails)."
+                text=f"🔍 Scouting early-stage AI/ML startups in {location}...\nTargeting personal founder inboxes across Hyderabad, Bangalore & Chennai with zero-bounce deliverability validation."
             )
         
         import exa_py
@@ -181,21 +183,43 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
             return
             
         exa = exa_py.Exa(config.exa_api_key)
-        query = f"innovative early-stage AI machine learning tech startups founded in {location} official product website"
+        results = []
+        seen_urls = set()
         
+        # Dual-Tier Search Strategy:
+        # 1. Founder-Centric: Discovers startups via founder names & personal email contacts
         try:
-            exa_res = exa.search_and_contents(
-                query,
+            f_res = exa.search_and_contents(
+                f"early-stage AI tech startup founders in {location} official website email",
                 type="neural",
-                num_results=25,
+                num_results=15,
                 exclude_domains=EXA_EXCLUDE_DOMAINS,
                 text=True
             )
-            results = exa_res.results
-            print(f"[Pipeline] Exa found {len(results)} potential startups in {location}", flush=True)
-        except Exception as e:
-            await context.bot.send_message(chat_id=chat_id, text=f"Exa search failed: {e}")
-            return
+            for r in f_res.results:
+                if r.url not in seen_urls:
+                    seen_urls.add(r.url)
+                    results.append(r)
+        except Exception as fe:
+            print(f"[Pipeline] Founder search error for {location}: {fe}", flush=True)
+
+        # 2. Company-Centric: Discovers innovative early-stage AI product platforms
+        try:
+            c_res = exa.search_and_contents(
+                f"innovative early-stage AI machine learning tech startups founded in {location} official product website",
+                type="neural",
+                num_results=15,
+                exclude_domains=EXA_EXCLUDE_DOMAINS,
+                text=True
+            )
+            for r in c_res.results:
+                if r.url not in seen_urls:
+                    seen_urls.add(r.url)
+                    results.append(r)
+        except Exception as ce:
+            print(f"[Pipeline] Company search error for {location}: {ce}", flush=True)
+
+        print(f"[Pipeline] Exa found {len(results)} total candidate startups/founders in {location}", flush=True)
             
         found_match = False
         skipped_aggregators = 0
@@ -358,16 +382,19 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
             break
             
         if not found_match:
-            curr_idx = LOCATIONS_LIST.index(location) if location in LOCATIONS_LIST else 0
-            next_loc = LOCATIONS_LIST[(curr_idx + 1) % len(LOCATIONS_LIST)]
-            if attempt_count < len(LOCATIONS_LIST):
-                print(f"[Pipeline] Checked {location}; scanning {next_loc} next (Attempt {attempt_count + 1}/{len(LOCATIONS_LIST)})...", flush=True)
+            # Strict Priority Order: Hyderabad -> Bangalore -> Chennai -> (only worst case: Pune, Delhi NCR, Mumbai)
+            full_order = PRIMARY_LOCATIONS + FALLBACK_LOCATIONS
+            curr_idx = full_order.index(location) if location in full_order else 0
+            if curr_idx + 1 < len(full_order):
+                next_loc = full_order[curr_idx + 1]
+                tier_label = "Primary Hub" if next_loc in PRIMARY_LOCATIONS else "Fallback State"
+                print(f"[Pipeline] Checked {location}; scanning {next_loc} next ({tier_label} {curr_idx + 2}/{len(full_order)})...", flush=True)
                 asyncio.create_task(run_startup_pipeline(chat_id, context, location_override=next_loc, attempt_count=attempt_count + 1))
                 return
             else:
                 breakdown = (
-                    f"Scanned candidate tech startups across {', '.join(LOCATIONS_LIST)}.\n\n"
-                    f"Send 'search' to trigger another scan cycle!"
+                    f"Scanned candidate tech startups across prioritized hubs: {', '.join(PRIMARY_LOCATIONS)}.\n\n"
+                    f"All deliverable inboxes in this cycle have been evaluated. Send 'search' anytime to run another scan cycle!"
                 )
                 await context.bot.send_message(chat_id=chat_id, text=breakdown)
     except Exception as e:

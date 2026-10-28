@@ -405,7 +405,35 @@ class FounderEmailEngine:
                             "source": "web_search_osint"
                         }
         except Exception as e:
-            print(f"[EmailEngine] Web search OSINT error for {clean_domain}: {e}", flush=True)
+            # Fallback to Exa neural search for founder contact
+            try:
+                from app.config import config
+                if config.exa_api_key:
+                    import exa_py
+                    exa = exa_py.Exa(config.exa_api_key)
+                    res = exa.search_and_contents(
+                        f'"{company_name}" founder email "{clean_domain}"',
+                        type="neural",
+                        num_results=3,
+                        text=True
+                    )
+                    email_pattern = re.compile(rf"\b[a-zA-Z0-9_.+-]+@{re.escape(clean_domain)}\b", re.IGNORECASE)
+                    for item in res.results:
+                        text_blob = (item.text or "") + " " + (item.title or "")
+                        found = email_pattern.findall(text_blob)
+                        for raw_em in found:
+                            em = cls.sanitize_email(raw_em)
+                            if cls.is_valid_syntax(em) and not cls.is_generic_email(em):
+                                user_part = em.split("@")[0].replace(".", " ").replace("-", " ").title()
+                                return {
+                                    "name": user_part,
+                                    "role": "Founder / Executive",
+                                    "email": em,
+                                    "score": 88,
+                                    "source": "exa_web_search_osint"
+                                }
+            except Exception as exa_e:
+                print(f"[EmailEngine] Exa fallback search error for {clean_domain}: {exa_e}", flush=True)
 
         return None
 
