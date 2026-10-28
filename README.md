@@ -87,3 +87,18 @@ An autonomous Telegram bot that acts as your personal "casting director" and rec
 - **PyPDF2**: For parsing uploaded resumes.
 - **Exa**: For web scraping
 - **OpenRouter**: Used as LLM
+
+
+## Open Source Projects & GitHub Repositories Used
+
+The sourcing and intelligence engine builds upon and adapts leading open-source projects across scraping, technical candidate evaluation, search aggregation, and semantic parsing:
+
+| GitHub Repository | Focus / Category | Role in Recruiter Copilot |
+| :--- | :--- | :--- |
+| [PyGithub/PyGithub](https://github.com/PyGithub/PyGithub) | Technical Talent Discovery | Integrated directly (`src/sourcing/github_sourcing.py`) to query the GitHub Users and Search API. Identifies active open-source contributors filtered by primary programming languages, repository stars, commit activity, and public profile emails. |
+| [deedy5/duckduckgo_search / ddgs](https://github.com/deedy5/duckduckgo_search) | Resilient Meta-Search Engine | Integrated directly (`src/sourcing/ddg.py`) to provide free, anti-bot resilient LinkedIn and web search without requiring paid API tokens or hitting strict rate limits. |
+| [cullenwatson/JobSpy](https://github.com/cullenwatson/JobSpy) | Multi-Platform Sourcing | Architectural blueprint for scraping and structuring multi-source professional profiles and job board metadata (LinkedIn, Indeed, Glassdoor) with anti-detection headers. |
+| [TomQuirk/linkedin-api](https://github.com/TomQuirk/linkedin-api) | LinkedIn Profile Modeling | Sourcing schema reference for modeling candidate profiles, work histories, exact technical skills, and education attributes from public professional profiles. |
+| [srbhr/Resume-Matcher](https://github.com/srbhr/Resume-Matcher) | Semantic Matching & ATS Scoring | Core matching concept used in `src/scoring/evaluator.py`: deterministic, evidence-based rubric scoring that matches candidate experience against mandatory and preferred requirements rather than naive keyword counting. |
+| [unclecode/crawl4ai](https://github.com/unclecode/crawl4ai) | LLM-Ready Web Scraping | Scraping and extraction model for turning messy web search snippets and developer portfolio pages into clean markdown/JSON for LLM evaluation. |
+| [searxng/searxng](https://github.com/searxng/searxng) | Meta Search Aggregation | Inspired our multi-provider fallback architecture: queries are automatically routed across SerpApi Google X-Ray, DuckDuckGo, and Bing to guarantee candidate discoveries even when a single provider experiences rate limits. |
