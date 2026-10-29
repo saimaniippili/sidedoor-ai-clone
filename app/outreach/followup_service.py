@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from typing import Optional, List
 from sqlalchemy.orm import Session
-from app.database.models import Outreach, ScheduledFollowup, Founder, Company, Opportunity
+from app.database.models import Outreach, ScheduledFollowup, Founder, Company, Opportunity, ActiveUser
 from app.matching.project_registry import get_project, VerifiedProject
 from app.outreach.email_generator import EmailGenerator
 from app.gmail.gmail_manager import GmailManager
@@ -130,12 +130,18 @@ class FollowupService:
             proj_id = selected_ids[0] if selected_ids else "datachat"
             project = get_project(proj_id) or get_project("datachat")
             
+            user = db.query(ActiveUser).first()
+            cand_name = user.candidate_name if user and user.candidate_name else "Saimani Ippili"
+            target_role = opp.potential_role if opp and opp.potential_role else "Data Science / ML Engineer"
+
             subject, body = await EmailGenerator.generate_followup(
                 step_number=action.step_number,
                 company_name=company.name,
                 founder_name=founder.name,
                 original_subject=outreach.email_subject,
-                best_project=project
+                best_project=project,
+                candidate_name=cand_name,
+                target_role=target_role
             )
             
             action.generated_subject = subject

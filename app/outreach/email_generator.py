@@ -132,53 +132,108 @@ Portfolio: https://personal-portfolio-chi-bay-62.vercel.app/
         founder_name: str,
         original_subject: str,
         best_project: VerifiedProject,
-        candidate_name: str = "Saimani Ippili"
+        candidate_name: str = "Saimani Ippili",
+        target_role: str = "Data Science / ML Engineer"
     ) -> Tuple[str, str]:
-        """Generates Day 3 (technical value-add) or Day 7 (polite break-up) follow-ups."""
+        """Generates Day 3 (technical value-add) or Day 7 (polite break-up) follow-ups strictly from the candidate's job-seeking perspective."""
         first_name = founder_name.split()[0] if founder_name and founder_name.lower() != 'team' else 'Team'
-        
+        clean_project_name = best_project.name.split(':')[0].strip()
+        key_tech = best_project.technologies[0] if best_project.technologies else "Python"
+        domain = best_project.domains[0] if best_project.domains else "software engineering"
+
+        system_prompt = (
+            f"You are {candidate_name}, an early-career software/ML engineer writing a follow-up email "
+            f"to {founder_name}, a founder/leader at {company_name}. "
+            f"CRITICAL PERSPECTIVE RULE: You are a CANDIDATE seeking to join their team as a {target_role}. "
+            f"You are NOT a recruiter, you are NOT hiring them, and you do not have roles to give. "
+            f"You are reaching out to ask if they have open roles or engineering needs at {company_name} "
+            f"where your skills could help. Keep the tone humble, proactive, and concise."
+        )
+
         if step_number == 1:
             # Step 1: Day 3 Value Add
             prompt = f"""
-Write a 3-day follow-up email to {founder_name} at {company_name}.
+Write a short, natural Day 3 follow-up email from candidate {candidate_name} to {founder_name} at {company_name}.
 Original Subject: {original_subject}
 
-RULES:
-1. Do NOT just say "did you see my last email?".
-2. Provide a fresh technical connection: reference candidate's verified capability in {best_project.domains[0]} using {best_project.technologies[0]}.
-3. Under 60 words.
-4. Sign off as {candidate_name}.
+CANDIDATE: {candidate_name} (Job seeker applying for {target_role})
+RECIPIENT: {founder_name} (Founder / Leader at {company_name})
+KEY PROJECT TO HIGHLIGHT: {clean_project_name} (built with {key_tech})
 
-RETURN JSON FORMAT:
+MANDATORY RULES:
+1. PERSPECTIVE: You are asking to join THEIR team for {target_role} roles. Never say "I have a role for you" or "align with our needs".
+2. Briefly reference candidate's hands-on project ({clean_project_name}) using {key_tech} as proof of capability.
+3. Max 45-55 words.
+4. Polite call to action: ask if they have 10-15 minutes to chat about potential {target_role} opportunities at {company_name}.
+5. Sign off:
+Best,
+{candidate_name}
+Portfolio: https://personal-portfolio-chi-bay-62.vercel.app/
+
+RETURN CLEAN JSON ONLY:
 {{
   "subject": "Re: {original_subject}",
-  "body": "Follow-up email body"
+  "body": "<clean formatted email body>"
 }}
 """
         else:
             # Step 2: Day 7 Soft Break-Up
             prompt = f"""
-Write a polite, zero-pressure final follow-up email (Day 7) to {founder_name} at {company_name}.
+Write a polite, zero-pressure final follow-up email (Day 7) from candidate {candidate_name} to {founder_name} at {company_name}.
 Original Subject: {original_subject}
 
-RULES:
-1. Extremely short (under 40 words).
-2. Acknowledge they're busy, assume timing may not align right now, and leave the door open.
-3. Sign off as {candidate_name}.
+CANDIDATE: {candidate_name} (Job seeker applying for {target_role})
+RECIPIENT: {founder_name} (Founder / Leader at {company_name})
 
-RETURN JSON FORMAT:
+MANDATORY RULES:
+1. PERSPECTIVE: You are an applicant acknowledging they are busy and timing may not align for open roles right now.
+2. Extremely short (under 40 words).
+3. Leave the door open for future {target_role} openings.
+4. Sign off:
+Best,
+{candidate_name}
+Portfolio: https://personal-portfolio-chi-bay-62.vercel.app/
+
+RETURN CLEAN JSON ONLY:
 {{
   "subject": "Re: {original_subject}",
-  "body": "Follow-up email body"
+  "body": "<clean formatted email body>"
 }}
 """
-        raw_res = await llm_router.complete(prompt, temperature=0.2)
+        raw_res = await llm_router.complete(prompt, system_prompt=system_prompt, temperature=0.2)
         try:
-            data = json.loads(raw_res)
-            return data.get("subject", f"Re: {original_subject}"), data.get("body", "")
-        except Exception:
-            if step_number == 1:
-                body = f"Hey {first_name},\n\nJust bumping this with quick context—I've also worked with {best_project.technologies[0]} on {best_project.name.split(':')[0]} and would love to bring that hands-on execution to {company_name}.\n\nLet me know if you have 15 minutes to connect.\n\nBest,\n{candidate_name}"
-            else:
-                body = f"Hey {first_name},\n\nWanted to send one last quick note. I understand timing might not be right currently. If an engineering or ML role opens up down the road, I'd welcome the chance to connect.\n\nBest,\n{candidate_name}"
-            return f"Re: {original_subject}", body
+            import re
+            cleaned_json = raw_res.strip()
+            if "```" in cleaned_json:
+                cleaned_json = re.sub(r"^```[a-zA-Z]*\n", "", cleaned_json)
+                cleaned_json = re.sub(r"\n```$", "", cleaned_json)
+            data = json.loads(cleaned_json)
+            subj = data.get("subject", f"Re: {original_subject}")
+            body = data.get("body", "")
+            if body and candidate_name in body and "Best," in body:
+                return subj, body
+        except Exception as e:
+            print(f"[EmailGenerator] JSON parse warning in followup: {e}")
+
+        # Fallback template strictly in candidate perspective
+        if step_number == 1:
+            body = (
+                f"Hey {first_name},\n\n"
+                f"Following up on my note regarding {target_role} opportunities at {company_name}. "
+                f"I've recently worked with {key_tech} building {clean_project_name} and would love to bring that hands-on execution to your engineering team.\n\n"
+                f"Would you have 10-15 minutes to chat about potential openings?\n\n"
+                f"Best,\n"
+                f"{candidate_name}\n"
+                f"Portfolio: https://personal-portfolio-chi-bay-62.vercel.app/"
+            )
+        else:
+            body = (
+                f"Hey {first_name},\n\n"
+                f"Wanted to send one last quick note. I understand you're busy and timing might not align right now. "
+                f"If an engineering or {target_role} role opens up down the road, I'd welcome the chance to connect.\n\n"
+                f"Wishing you and {company_name} continued success!\n\n"
+                f"Best,\n"
+                f"{candidate_name}\n"
+                f"Portfolio: https://personal-portfolio-chi-bay-62.vercel.app/"
+            )
+        return f"Re: {original_subject}", body
