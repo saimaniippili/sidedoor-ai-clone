@@ -105,6 +105,12 @@ class GitHubProjectService:
                     if name.lower() in EXCLUDED_REPOS:
                         continue
 
+                    # STARRED FILTER: Only include repositories you have explicitly starred (starred >= 1)
+                    # All unstarred repositories are automatically ignored.
+                    stargazers = repo.get("stargazers_count", 0)
+                    if stargazers < 1:
+                        continue
+
                     # Fetch README for rich context
                     readme_url = f"https://api.github.com/repos/{GITHUB_USERNAME}/{name}/readme"
                     readme_text = ""
