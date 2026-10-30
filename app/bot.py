@@ -68,6 +68,7 @@ from app.database.models import (
 from app.discovery.startup_filter import StartupFilter
 from app.discovery.email_engine import FounderEmailEngine
 from app.matching.project_registry import get_project, VerifiedProject, list_all_projects
+from app.matching.github_project_service import GitHubProjectService
 from app.matching.resume_parser import ResumeParser
 from app.matching.project_scorer import ProjectScorer
 from app.outreach.framework_selector import OutreachFrameworkSelector
@@ -155,6 +156,7 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
         role = dynamic_roles[0] if dynamic_roles else "Data Science / ML Engineer"
         
         candidate_projects = []
+        # Source 1: Verified Resume Projects
         if user and user.extracted_projects:
             try:
                 p_data = json.loads(user.extracted_projects)
@@ -163,6 +165,18 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
                 print(f"Error loading dynamic projects: {e}")
         if not candidate_projects:
             candidate_projects = list_all_projects()
+
+        # Source 2: Dynamic Live GitHub Repositories (READMEs, architectures, live code)
+        try:
+            gh_projects = await GitHubProjectService.get_github_projects()
+            # Combine without duplicate project names
+            existing_names = {p.name.lower() for p in candidate_projects}
+            for gp in gh_projects:
+                if gp.name.lower() not in existing_names:
+                    candidate_projects.append(gp)
+            print(f"[Pipeline] Combined Project Pool: {len(candidate_projects)} projects (Resume + GitHub).", flush=True)
+        except Exception as ghe:
+            print(f"[Pipeline] GitHub project integration warning: {ghe}", flush=True)
 
         # Priority-First Location Selection: Hyderabad -> Bangalore -> Chennai -> Fallback hubs
         if location_override:
