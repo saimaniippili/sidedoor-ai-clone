@@ -67,7 +67,7 @@ Structure:
             "CASUAL_INTRODUCTION": """
 Framework: CASUAL_INTRODUCTION
 Structure:
-1. Honest, concise introduction as a 2026 B.Tech CSE engineer focused on Data Science / ML.
+1. Honest, concise introduction as an AI / ML Engineer at StyloWorld focused on Data Science / ML / AI systems.
 2. Highlight genuine interest in their product mission with one verified fact about what they build.
 3. Reference your strongest relevant project and skills.
 4. Ask if they have open bandwidth for a quick chat or internship/junior engineering role.

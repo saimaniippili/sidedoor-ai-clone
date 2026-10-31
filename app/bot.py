@@ -1,12 +1,31 @@
 PRIMARY_LOCATIONS = ["Hyderabad", "Bangalore", "Chennai"]
 FALLBACK_LOCATIONS = ["Pune", "Delhi NCR", "Mumbai"]
 LOCATIONS_LIST = PRIMARY_LOCATIONS + FALLBACK_LOCATIONS
+
+TECH_NICHES = [
+    ("Generative AI & Autonomous Agents", "generative AI agents autonomous systems LLM RAG enterprise software"),
+    ("Computer Vision & Visual AI", "computer vision industrial automation inspection edge AI visual deep learning"),
+    ("Healthcare & MedTech AI", "healthtech medical diagnostics clinical intelligence healthcare AI biotech"),
+    ("FinTech & Risk Intelligence", "fintech fraud detection algorithmic risk compliance ML banking AI"),
+    ("B2B SaaS & Developer Platforms", "B2B SaaS AI developer tooling automated workflows cloud infrastructure"),
+    ("DeepTech & Robotics", "deeptech robotics IoT autonomous navigation smart edge intelligence"),
+    ("Conversational & Voice AI", "conversational AI voice agents speech intelligence NLP multimodal"),
+    ("Incubated & Accelerator Startups", "T-Hub IIIT Hyderabad CIE IIT Madras incubated AI tech startups seed stage"),
+    ("Seed & Pre-Seed Startups", "pre-seed seed stage AI machine learning tech startups hiring founding engineers")
+]
+
 EXA_EXCLUDE_DOMAINS = [
     "linkedin.com", "ycombinator.com", "glassdoor.com", "indeed.com",
     "nasscom.in", "inc42.com", "yourstory.com", "tracxn.com",
     "crunchbase.com", "f6s.com", "pitchbook.com", "wellfound.com",
     "angel.co", "medium.com", "github.com", "wikipedia.org",
-    "techcrunch.com", "economictimes.indiatimes.com", "startuply.vc"
+    "techcrunch.com", "economictimes.indiatimes.com", "startuply.vc",
+    "thewire.in", "timesofindia.indiatimes.com", "livemint.com",
+    "business-standard.com", "techstory.in", "entrackr.com", "vccircle.com",
+    "moneycontrol.com", "bloomberg.com", "reuters.com", "forbes.com",
+    "substack.com", "news18.com", "hindustantimes.com", "ndtv.com",
+    "indianexpress.com", "apollo.io", "zoominfo.com", "lusha.com",
+    "rocketreach.co", "gitlab.com", "google.com", "youtube.com"
 ]
 
 
@@ -77,7 +96,7 @@ from app.outreach.followup_service import FollowupService
 from app.gmail.gmail_manager import GmailManager
 from app.intelligence.llm_router import llm_router
 
-SYSTEM_PROMPT = """You are Recruiter Copilot, an elite technical recruiting assistant. Your goal is to guide the candidate through onboarding to find them an early-stage startup engineering role.
+SYSTEM_PROMPT = """You are Sidedoor, an elite AI job search agent. Your goal is to guide the candidate through onboarding to find them an early-stage startup engineering role.
 Speak professionally yet casually like an engineer. Keep messages concise.
 Onboarding steps:
 1. Ask for their target technical role (e.g., Data Science, ML Engineer, Backend).
@@ -200,13 +219,21 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
         results = []
         seen_urls = set()
         
-        # Dual-Tier Search Strategy:
+        # Dynamic Niche Rotation to discover fresh startups on every run
+        import random
+        sampled_niches = random.sample(TECH_NICHES, 2)
+        niche_1_title, niche_1_keywords = sampled_niches[0]
+        niche_2_title, niche_2_keywords = sampled_niches[1]
+        print(f"[Pipeline] Scanning {location} targeting niches: '{niche_1_title}' & '{niche_2_title}'...", flush=True)
+
+        # Dual-Tier Search Strategy with dynamic niches:
         # 1. Founder-Centric: Discovers startups via founder names & personal email contacts
         try:
+            f_query = f"early-stage AI tech startup founders in {location} {niche_1_keywords} official website email"
             f_res = exa.search_and_contents(
-                f"early-stage AI tech startup founders in {location} official website email",
+                f_query,
                 type="neural",
-                num_results=15,
+                num_results=20,
                 exclude_domains=EXA_EXCLUDE_DOMAINS,
                 text=True
             )
@@ -215,14 +242,15 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
                     seen_urls.add(r.url)
                     results.append(r)
         except Exception as fe:
-            print(f"[Pipeline] Founder search error for {location}: {fe}", flush=True)
+            print(f"[Pipeline] Founder search error for {location} ({niche_1_title}): {fe}", flush=True)
 
         # 2. Company-Centric: Discovers innovative early-stage AI product platforms
         try:
+            c_query = f"innovative early-stage AI machine learning tech startups founded in {location} {niche_2_keywords} official product website"
             c_res = exa.search_and_contents(
-                f"innovative early-stage AI machine learning tech startups founded in {location} official product website",
+                c_query,
                 type="neural",
-                num_results=15,
+                num_results=20,
                 exclude_domains=EXA_EXCLUDE_DOMAINS,
                 text=True
             )
@@ -231,7 +259,7 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
                     seen_urls.add(r.url)
                     results.append(r)
         except Exception as ce:
-            print(f"[Pipeline] Company search error for {location}: {ce}", flush=True)
+            print(f"[Pipeline] Company search error for {location} ({niche_2_title}): {ce}", flush=True)
 
         print(f"[Pipeline] Exa found {len(results)} total candidate startups/founders in {location}", flush=True)
             
@@ -431,7 +459,7 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db.commit()
     db.close()
     
-    welcome_text = "Recruiter Copilot Active!\n\nCandidate: Saimani Ippili\nTarget Roles: Data Science / AI / ML / Backend Engineer\nLocation Hierarchy: 1. Hyderabad (Primary) -> 2. Bangalore -> 3. Chennai\n\nHunting down the next qualified startup now..."
+    welcome_text = "Sidedoor Active! 🚪\n\nCandidate: Saimani Ippili (AI/ML Engineer at StyloWorld)\nTarget Roles: Data Science / AI / ML / Backend Engineer\nLocation Hierarchy: 1. Hyderabad (Primary) -> 2. Bangalore -> 3. Chennai\n\nHunting down the next qualified startup now..."
     await update.message.reply_text(welcome_text)
     asyncio.create_task(run_startup_pipeline(chat_id, context))
 
@@ -615,6 +643,19 @@ async def periodic_followup_job(context: ContextTypes.DEFAULT_TYPE):
     finally:
         db.close()
 
+async def periodic_scouting_job(context: ContextTypes.DEFAULT_TYPE):
+    """Autonomous morning & midday scouting job to proactively draft leads."""
+    db = SessionLocal()
+    try:
+        user = db.query(ActiveUser).filter(ActiveUser.is_active == 1).first()
+        if user and user.chat_id:
+            print(f"[Scheduled Scouting] Proactively scanning startups for candidate {user.candidate_name or 'Saimani'}...", flush=True)
+            asyncio.create_task(run_startup_pipeline(user.chat_id, context))
+    except Exception as e:
+        print(f"[Scheduled Scouting Error]: {e}", flush=True)
+    finally:
+        db.close()
+
 def main():
     threading.Thread(target=start_health_server, daemon=True).start()
 
@@ -626,9 +667,10 @@ def main():
         
     app = Application.builder().token(config.telegram_bot_token).build()
     
-    # Schedule hourly background follow-up worker
+    # Schedule background jobs: follow-ups every hour, autonomous scouting every 4 hours
     if app.job_queue:
         app.job_queue.run_repeating(periodic_followup_job, interval=3600, first=60)
+        app.job_queue.run_repeating(periodic_scouting_job, interval=14400, first=300)
     else:
         print("WARNING: JobQueue not initialized")
     

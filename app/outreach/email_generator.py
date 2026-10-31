@@ -50,7 +50,7 @@ Relevant Signals Identified: {", ".join(project_signals) if project_signals else
 
 CANDIDATE PROFILE:
 Name: {candidate_name}
-Background: B.Tech CSE (2026), strong hands-on experience across Python, ML pipelines, LangChain/RAG, and full-stack integration.
+Background: Currently working as an AI / ML Engineer at StyloWorld, with hands-on expertise across Python, Generative AI pipelines, LangChain, local LLMs, and RAG architectures.
 
 MANDATORY STRUCTURE & FORMATTING RULES (DO NOT WRITE A WALL OF TEXT):
 1. Format as 3 concise, visually clean paragraphs separated by blank lines:

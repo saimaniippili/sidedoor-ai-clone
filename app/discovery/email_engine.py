@@ -225,10 +225,10 @@ class FounderEmailEngine:
                             has_mx = v_data.get("mx_records") is not False
                             has_smtp = v_data.get("smtp_server") is not False
 
-                            if v_status != "invalid" and v_result != "undeliverable" and v_score >= 80 and has_mx and has_smtp:
-                                fname = target.get("first_name", "").strip()
-                                lname = target.get("last_name", "").strip()
-                                founder_name = f"{fname} {lname}".strip() or "Founder"
+                            if v_status != "invalid" and v_result != "undeliverable" and v_score >= 70 and has_mx and has_smtp:
+                                fname = (target.get("first_name") or "").strip()
+                                lname = (target.get("last_name") or "").strip()
+                                founder_name = f"{fname} {lname}".strip() or (val.split("@")[0].replace(".", " ").replace("-", " ").title())
                                 founder_role = target.get("position") or "Founder / Leader"
                                 return {
                                     "name": founder_name,
@@ -237,6 +237,20 @@ class FounderEmailEngine:
                                     "score": v_score,
                                     "source": "hunter_verified"
                                 }
+                        # Fallback if verifier had rate-limit or timeout, but domain search had high confidence
+                        domain_conf = target.get("confidence", 0)
+                        if domain_conf >= 75:
+                            fname = (target.get("first_name") or "").strip()
+                            lname = (target.get("last_name") or "").strip()
+                            founder_name = f"{fname} {lname}".strip() or (val.split("@")[0].replace(".", " ").replace("-", " ").title())
+                            founder_role = target.get("position") or "Founder / Leader"
+                            return {
+                                "name": founder_name,
+                                "role": founder_role,
+                                "email": val,
+                                "score": domain_conf,
+                                "source": "hunter_domain_search"
+                            }
         except Exception as e:
             print(f"[EmailEngine] Hunter query failed for {clean_domain}: {e}", flush=True)
 
@@ -280,32 +294,36 @@ class FounderEmailEngine:
         # 2. Check official website pages
         endpoints = [
             f"https://{clean_domain}/.well-known/security.txt",
-            f"https://{clean_domain}/security.txt",
             f"https://{clean_domain}/about",
             f"https://{clean_domain}/team",
             f"https://{clean_domain}/contact"
         ]
 
-        async with httpx.AsyncClient(timeout=7.0, follow_redirects=True, headers=headers) as client:
-            for ep in endpoints:
-                try:
-                    resp = await client.get(ep)
-                    if resp.status_code == 200 and resp.text:
-                        text = resp.text
-                        found = email_pattern.findall(text)
+        try:
+            async with httpx.AsyncClient(timeout=4.0, follow_redirects=True, headers=headers) as client:
+                async def fetch(url):
+                    try:
+                        return await client.get(url)
+                    except Exception:
+                        return None
+                responses = await asyncio.gather(*[fetch(ep) for ep in endpoints])
+                for idx, resp in enumerate(responses):
+                    if resp and resp.status_code == 200 and resp.text:
+                        found = email_pattern.findall(resp.text)
                         for raw_em in found:
                             em = cls.sanitize_email(raw_em)
                             if cls.is_valid_syntax(em) and not cls.is_generic_email(em):
                                 user_part = em.split("@")[0].replace(".", " ").replace("-", " ").title()
+                                ep_name = endpoints[idx].split('/')[-1]
                                 return {
                                     "name": user_part,
                                     "role": "Founder / Technical Leader",
                                     "email": em,
                                     "score": 85,
-                                    "source": f"website_{ep.split('/')[-1]}"
+                                    "source": f"website_{ep_name}"
                                 }
-                except Exception:
-                    pass
+        except Exception as webe:
+            print(f"[EmailEngine] Fast website OSINT warning for {clean_domain}: {webe}", flush=True)
 
         return None
 
@@ -370,70 +388,40 @@ class FounderEmailEngine:
     @classmethod
     async def find_via_web_search_osint(cls, company_name: str, domain: str) -> Optional[Dict[str, Any]]:
         """
-        Search public web indices via DuckDuckGo (ddgs) for verified founder emails.
+        Fast targeted search for verified founder leadership emails using Exa neural search.
         """
         clean_domain = domain.lower().replace("https://", "").replace("http://", "").strip("/")
         if "/" in clean_domain:
             clean_domain = clean_domain.split("/")[0]
 
         try:
-            from ddgs import DDGS
-            import concurrent.futures
-            
-            query = f'"{company_name}" founder email "@{clean_domain}"'
-            
-            def run_ddgs():
-                with DDGS() as ddgs:
-                    return list(ddgs.text(query, max_results=5))
-
-            loop = asyncio.get_event_loop()
-            results = await loop.run_in_executor(None, run_ddgs)
-            
-            email_pattern = re.compile(rf"\b[a-zA-Z0-9_.+-]+@{re.escape(clean_domain)}\b", re.IGNORECASE)
-            for r in results:
-                body = r.get("body", "") + " " + r.get("title", "")
-                found = email_pattern.findall(body)
-                for raw_em in found:
-                    em = cls.sanitize_email(raw_em)
-                    if cls.is_valid_syntax(em) and not cls.is_generic_email(em):
-                        user_part = em.split("@")[0].replace(".", " ").replace("-", " ").title()
-                        return {
-                            "name": user_part,
-                            "role": "Founder / Executive",
-                            "email": em,
-                            "score": 82,
-                            "source": "web_search_osint"
-                        }
-        except Exception as e:
-            # Fallback to Exa neural search for founder contact
-            try:
-                from app.config import config
-                if config.exa_api_key:
-                    import exa_py
-                    exa = exa_py.Exa(config.exa_api_key)
-                    res = exa.search_and_contents(
-                        f'"{company_name}" founder email "{clean_domain}"',
-                        type="neural",
-                        num_results=3,
-                        text=True
-                    )
-                    email_pattern = re.compile(rf"\b[a-zA-Z0-9_.+-]+@{re.escape(clean_domain)}\b", re.IGNORECASE)
-                    for item in res.results:
-                        text_blob = (item.text or "") + " " + (item.title or "")
-                        found = email_pattern.findall(text_blob)
-                        for raw_em in found:
-                            em = cls.sanitize_email(raw_em)
-                            if cls.is_valid_syntax(em) and not cls.is_generic_email(em):
-                                user_part = em.split("@")[0].replace(".", " ").replace("-", " ").title()
-                                return {
-                                    "name": user_part,
-                                    "role": "Founder / Executive",
-                                    "email": em,
-                                    "score": 88,
-                                    "source": "exa_web_search_osint"
-                                }
-            except Exception as exa_e:
-                print(f"[EmailEngine] Exa fallback search error for {clean_domain}: {exa_e}", flush=True)
+            from app.config import config
+            if config.exa_api_key:
+                import exa_py
+                exa = exa_py.Exa(config.exa_api_key)
+                res = exa.search_and_contents(
+                    f'"{company_name}" (founder OR "co-founder" OR CEO OR CTO) email "{clean_domain}"',
+                    type="neural",
+                    num_results=3,
+                    text=True
+                )
+                email_pattern = re.compile(rf"\b[a-zA-Z0-9_.+-]+@{re.escape(clean_domain)}\b", re.IGNORECASE)
+                for item in res.results:
+                    text_blob = (item.text or "") + " " + (item.title or "")
+                    found = email_pattern.findall(text_blob)
+                    for raw_em in found:
+                        em = cls.sanitize_email(raw_em)
+                        if cls.is_valid_syntax(em) and not cls.is_generic_email(em):
+                            user_part = em.split("@")[0].replace(".", " ").replace("-", " ").title()
+                            return {
+                                "name": user_part,
+                                "role": "Founder / Executive",
+                                "email": em,
+                                "score": 88,
+                                "source": "exa_web_search_osint"
+                            }
+        except Exception as exa_e:
+            print(f"[EmailEngine] Exa web search OSINT error for {clean_domain}: {exa_e}", flush=True)
 
         return None
 

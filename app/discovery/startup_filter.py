@@ -12,7 +12,17 @@ class StartupFilter:
         "linkedin.com", "wellfound.com", "angel.co", "ycombinator.com", "ycombinator.org",
         "unojobs.com", "cutshort.io", "hirist.tech", "peerlist.io", "internshala.com",
         "naukri.com", "indeed.com", "glassdoor.com", "foundit.in", "sourcingxpress.com",
-        "getmereferred.com", "zerogtalent.com", "jobboard.co.in"
+        "getmereferred.com", "zerogtalent.com", "jobboard.co.in",
+        # News, Press Releases, Media, Blogs, and Directories to prevent non-startup pollution
+        "thewire.in", "economictimes.indiatimes.com", "timesofindia.indiatimes.com",
+        "livemint.com", "business-standard.com", "techstory.in", "entrackr.com",
+        "vccircle.com", "inc42.com", "yourstory.com", "moneycontrol.com",
+        "bloomberg.com", "reuters.com", "forbes.com", "techcrunch.com",
+        "wikipedia.org", "medium.com", "substack.com", "news18.com",
+        "hindustantimes.com", "ndtv.com", "indianexpress.com", "startuply.vc",
+        "pitchbook.com", "f6s.com", "crunchbase.com", "tracxn.com", "apollo.io",
+        "zoominfo.com", "lusha.com", "rocketreach.co", "github.com", "gitlab.com",
+        "google.com", "yahoo.com", "youtube.com", "facebook.com", "twitter.com", "x.com"
     }
     
     @classmethod
