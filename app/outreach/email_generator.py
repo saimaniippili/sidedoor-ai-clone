@@ -21,7 +21,8 @@ class EmailGenerator:
         project_signals: List[str],
         candidate_name: str = "Saimani Ippili"
     ) -> Tuple[str, str]:
-        
+        import re
+        clean_project_name = re.sub(r"(?i)\s*\(GitHub.*?\)", "", best_project.name.split(":")[0]).strip()
         framework_instructions = OutreachFrameworkSelector.get_framework_instructions(selected_framework)
         
         system_prompt = (
@@ -55,7 +56,7 @@ Background: Currently working as an AI / ML Engineer at StyloWorld, with hands-o
 MANDATORY STRUCTURE & FORMATTING RULES (DO NOT WRITE A WALL OF TEXT):
 1. Format as 3 concise, visually clean paragraphs separated by blank lines:
    - Paragraph 1 (The Hook): 1 sentence showing genuine, specific understanding of what {company_name} is building.
-   - Paragraph 2 (Proof of Work): 2 sentences highlighting candidate's verified project ("{best_project.name.split(':')[0]}"): what it does, key technologies ({", ".join(best_project.technologies[:4])}), and key achievement/capability.
+   - Paragraph 2 (Proof of Work): 2 sentences highlighting candidate's verified project ("{clean_project_name}"): what it does, key technologies ({", ".join(best_project.technologies[:4])}), and key achievement/capability. Never append '(GitHub)' or repository source tags in parentheses; refer to the project naturally by its name ("{clean_project_name}").
    - Paragraph 3 (Call to Action & Portfolio): 1 sentence asking for a quick 15-minute conversation, with candidate's live portfolio attached.
 2. Greeting: "Hey {founder_name.split()[0] if founder_name and founder_name.lower() != 'team' else 'Team'},"
 3. Length: 75 to 95 words maximum.
@@ -74,7 +75,7 @@ Hey {founder_name.split()[0] if founder_name and founder_name.lower() != 'team' 
 
 <1-sentence observation about {company_name}'s product or technical mission.>
 
-<2-sentence punchy highlight of candidate's project "{best_project.name.split(':')[0]}", tech used, and how it directly maps to this domain.>
+<2-sentence punchy highlight of candidate's project "{clean_project_name}", tech used, and how it directly maps to this domain.>
 
 <1-sentence asking if they have 15 minutes to chat about potential {role_target} roles.>
 

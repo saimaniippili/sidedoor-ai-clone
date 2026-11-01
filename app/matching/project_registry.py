@@ -15,6 +15,28 @@ class VerifiedProject(BaseModel):
 
 # Concrete Project Registry strictly derived from Saimani Ippili's verified resume
 PROJECT_REGISTRY: Dict[str, VerifiedProject] = {
+    "sidedoor_ai_agent": VerifiedProject(
+        project_id="sidedoor_ai_agent",
+        name="Sidedoor: Autonomous AI Job Search Agent",
+        summary="An end-to-end autonomous agentic system engineered to scout, research, verify, and match early-stage tech startup founders. Features multi-tier DNS-over-HTTPS MX deliverability validation (Zero Bounces standard), neural search entity extraction via Exa API, dynamic multi-modal LLM routing, Telegram bot command and notification interface, and automated Gmail outreach workflows.",
+        domains=["genai", "llm_apps", "agentic_systems", "autonomous_agents", "recruiting_tech", "data_engineering", "full_stack"],
+        capabilities=[
+            "Autonomous agentic pipeline discovering and evaluating technical startups",
+            "Multi-tier deliverability gatekeeper with DNS-over-HTTPS MX resolution and Zero Bounces validation",
+            "LLM intelligence routing for real-time leadership extraction, company technical profiling, and personalized outreach",
+            "Telegram bot asynchronous webhook & polling controller for real-time human-in-the-loop candidate approvals",
+            "Gmail API integration with automated Day 3 / Day 7 follow-up sequence reconciliation"
+        ],
+        technologies=["Python", "FastAPI", "Exa AI", "PostgreSQL", "LangChain", "Telegram API", "Gmail API", "Docker", "LLM Agents"],
+        implemented_features=[
+            "Multi-tier founder email discovery and DNS MX verification preventing bounces",
+            "Autonomous 24/7 background scheduler delivering structured startup matches and candidate pitches",
+            "Dynamic candidate portfolio matching combining resume evidence and public GitHub projects"
+        ],
+        verifiable_accomplishments="Engineered end-to-end agentic workflow delivering high-accuracy founder discovery and verified outreach with 0% bounce rate.",
+        implementation_status="Implemented",
+        evidence_notes="Live production autonomous agent deployed on Render and connected to Telegram and Gmail."
+    ),
     "datachat": VerifiedProject(
         project_id="datachat",
         name="DataChat: Conversational Data Analysis Tool",

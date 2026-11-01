@@ -21,7 +21,10 @@ class ProjectScorer:
         "recruiting_tech": ["hiring", "recruiting", "talent", "hr", "candidate", "job", "staffing"],
         "healthcare_tech": ["health", "medical", "clinical", "patient", "pharma", "biotech"],
         "content_moderation": ["moderation", "toxic", "content safety", "brand safety", "compliance"],
-        "llm_apps": ["genai", "generative ai", "copilot", "assistant", "agent", "llm", "chatbot", "prompt"]
+        "llm_apps": ["genai", "generative ai", "copilot", "assistant", "agent", "llm", "chatbot", "prompt"],
+        "agentic_systems": ["agent", "agentic", "autonomous", "workflow", "automation", "orchestration", "multi-agent", "action", "pipeline"],
+        "computer_vision": ["computer vision", "vision", "image", "video", "detection", "segmentation", "opencv", "visual", "inspection", "camera"],
+        "full_stack": ["backend", "api", "fastapi", "flask", "docker", "cloud", "database", "postgres", "redis", "rest"]
     }
     
     @classmethod

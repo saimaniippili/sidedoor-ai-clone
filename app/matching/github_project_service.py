@@ -65,7 +65,12 @@ DOMAIN_MAP = {
 EXCLUDED_REPOS = {
     "github-profile", "saimaniippili.github.io", "saimani_portfolio",
     "2200031044_jfsd_semend_exam", "prodigy_wd_01", "prodigy_wd_02",
-    "prodigy_wd_03", "prodigy_wd_04", "prodigy_wd_05"
+    "prodigy_wd_03", "prodigy_wd_04", "prodigy_wd_05",
+    "house_price_prediction-", "house_price_prediction",
+    "Hospital-Patient-Readmission-Analysis-Dashboard",
+    "HR-ANALYTICS-DASHBOARD-", "SUPPLY-CHAIN-DELAY-ANALYSIS",
+    "pocketpixels_portfolio", "serene-mindfulness-sanctuary",
+    "Recruiter-Copilot", "sidedoor-ai-clone"
 }
 
 
@@ -164,7 +169,7 @@ class GitHubProjectService:
 
                     vp = VerifiedProject(
                         project_id=f"gh_{name.lower().replace('-', '_')}",
-                        name=f"{display_name} (GitHub: {name})",
+                        name=display_name,
                         summary=f"{summary} | Repository: {html_url}",
                         domains=domains,
                         capabilities=capabilities,

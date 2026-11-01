@@ -174,26 +174,32 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
             except: pass
         role = dynamic_roles[0] if dynamic_roles else "Data Science / ML Engineer"
         
-        candidate_projects = []
-        # Source 1: Verified Resume Projects
+        # Base: Core Verified Project Registry (Sidedoor, DataChat, MedSage, Fake Job Detection, etc.)
+        candidate_projects = list_all_projects()
+        existing_names = {p.name.split(':')[0].strip().lower() for p in candidate_projects}
+
+        # Source 1: Additional Verified Resume Projects from user upload
         if user and user.extracted_projects:
             try:
                 p_data = json.loads(user.extracted_projects)
-                candidate_projects = ResumeParser.convert_to_verified_projects(p_data)
+                custom_resume_projects = ResumeParser.convert_to_verified_projects(p_data)
+                for crp in custom_resume_projects:
+                    base_n = crp.name.split(':')[0].strip().lower()
+                    if base_n not in existing_names:
+                        candidate_projects.append(crp)
+                        existing_names.add(base_n)
             except Exception as e:
                 print(f"Error loading dynamic projects: {e}")
-        if not candidate_projects:
-            candidate_projects = list_all_projects()
 
-        # Source 2: Dynamic Live GitHub Repositories (READMEs, architectures, live code)
+        # Source 2: Dynamic Live GitHub Repositories (Filtered starred repos)
         try:
             gh_projects = await GitHubProjectService.get_github_projects()
-            # Combine without duplicate project names
-            existing_names = {p.name.lower() for p in candidate_projects}
             for gp in gh_projects:
-                if gp.name.lower() not in existing_names:
+                base_n = gp.name.split(':')[0].strip().lower()
+                if base_n not in existing_names:
                     candidate_projects.append(gp)
-            print(f"[Pipeline] Combined Project Pool: {len(candidate_projects)} projects (Resume + GitHub).", flush=True)
+                    existing_names.add(base_n)
+            print(f"[Pipeline] Combined Project Pool: {len(candidate_projects)} projects (Core Verified + Resume + GitHub).", flush=True)
         except Exception as ghe:
             print(f"[Pipeline] GitHub project integration warning: {ghe}", flush=True)
 
