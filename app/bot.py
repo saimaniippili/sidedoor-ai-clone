@@ -67,7 +67,9 @@ def start_health_server():
 
 import os
 import io
+import re
 import json
+import random
 import asyncio
 from datetime import datetime
 from typing import Optional
@@ -176,6 +178,7 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
         
         # Helper for canonical deduplication of projects across core registry, resume, and GitHub
         def _canonical_proj_key(name: str) -> str:
+            import re
             clean = re.sub(r"[^a-zA-Z0-9\s]", "", name.lower())
             for key in ["fake job", "medsage", "toxic comment", "datachat", "sidedoor", "recruiter", "remote access"]:
                 if key in clean:
