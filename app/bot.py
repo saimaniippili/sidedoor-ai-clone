@@ -314,9 +314,16 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
             if db.query(Founder).filter(Founder.email == target_email).first():
                 continue
                 
-            # 2. Dynamic Project Matching Engine using candidate's actual projects
+            # Enrich company data from LLM intelligence extraction if available
+            if verified_contact.company_clean_name and len(verified_contact.company_clean_name) > 2:
+                company_name = verified_contact.company_clean_name
+            if verified_contact.product_summary and len(verified_contact.product_summary) > 20:
+                research_text = verified_contact.product_summary
+
+            tech_context = " ".join(verified_contact.technical_focus or [])
+            # 2. Dynamic Project Matching Engine using candidate's actual projects (Resume + Starred GitHub)
             scored_projects = ProjectScorer.select_best_projects(
-                company_text=f"{company_name} {research_text}",
+                company_text=f"{company_name} {research_text} {tech_context}",
                 role_title=role,
                 max_projects=1,
                 candidate_projects=candidate_projects

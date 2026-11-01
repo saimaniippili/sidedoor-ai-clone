@@ -73,4 +73,45 @@ class LLMRouter:
             
         raise ValueError("No LLM client configured (both NVIDIA_API_KEY and OPENROUTER_API_KEY are missing).")
 
+    async def extract_company_intelligence(self, page_text: str, domain: str) -> Dict[str, Any]:
+        """
+        Lightweight ScrapeGraph-style LLM intelligence extraction over page text.
+        Extracts founder leadership, product capabilities, and technical focus without running local browsers.
+        """
+        if not page_text or len(page_text.strip()) < 50:
+            return {}
+
+        prompt = f"""You are an expert technical intelligence analyst. Analyze the following webpage text from the company domain '{domain}'.
+Extract key leadership and technical insights.
+
+WEBPAGE TEXT:
+{page_text[:3500]}
+
+Extract the following in strictly valid JSON format:
+{{
+  "company_name": "<clean company name>",
+  "founder_name": "<full name of founder, co-founder, CEO, or CTO; leave empty string if not mentioned>",
+  "founder_role": "<founder, co-founder, CEO, CTO, or Head of Engineering; leave empty string if not mentioned>",
+  "founder_email": "<personal founder email ending with @{domain} if mentioned; leave empty string if not found>",
+  "technical_focus": ["<key tech 1>", "<key tech 2>", "<key tech 3>"],
+  "product_summary": "<1-2 sentence precise technical explanation of what this startup builds>",
+  "is_authentic_tech_startup": true
+}}
+
+Rules:
+1. Only return real person names explicitly mentioned in the text as founders/leaders. Do NOT invent names.
+2. If no founder is mentioned, set "founder_name": "".
+3. Return raw JSON only with no conversational preamble or markdown backticks.
+"""
+        try:
+            raw_json = await self.complete(prompt, temperature=0.1, max_tokens=500)
+            cleaned = self.clean_output(raw_json)
+            if cleaned.startswith("```"):
+                cleaned = re.sub(r"^```[a-zA-Z]*\n", "", cleaned)
+                cleaned = re.sub(r"\n```$", "", cleaned)
+            return json.loads(cleaned)
+        except Exception as e:
+            print(f"[LLMRouter] Intelligence extraction warning for {domain}: {e}", flush=True)
+            return {}
+
 llm_router = LLMRouter()

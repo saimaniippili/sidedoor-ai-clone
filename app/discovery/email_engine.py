@@ -36,6 +36,9 @@ class VerifiedFounderContact(BaseModel):
     verification_source: str
     mx_provider: str
     is_deliverable: bool
+    company_clean_name: Optional[str] = None
+    product_summary: Optional[str] = None
+    technical_focus: Optional[List[str]] = None
 
 
 class FounderEmailEngine:
@@ -257,6 +260,40 @@ class FounderEmailEngine:
         return None
 
     @classmethod
+    async def find_via_hunter_name(cls, domain: str, full_name: str, hunter_api_key: str) -> Optional[Dict[str, Any]]:
+        """
+        Query Hunter.io Email Finder using a known founder full name.
+        """
+        if not hunter_api_key or not full_name:
+            return None
+        clean_domain = domain.lower().replace("https://", "").replace("http://", "").strip("/").split("/")[0]
+        try:
+            from urllib.parse import quote_plus
+            encoded_name = quote_plus(full_name)
+            finder_url = f"https://api.hunter.io/v2/email-finder?domain={clean_domain}&full_name={encoded_name}&api_key={hunter_api_key}"
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.get(finder_url)
+                if resp.status_code == 200:
+                    d = resp.json().get("data", {})
+                    email = cls.sanitize_email(d.get("email", ""))
+                    score = d.get("score", 0)
+                    if email and cls.is_valid_syntax(email) and not cls.is_generic_email(email) and score >= 70:
+                        fname = (d.get("first_name") or "").strip()
+                        lname = (d.get("last_name") or "").strip()
+                        resolved_name = f"{fname} {lname}".strip() or full_name
+                        role = d.get("position") or "Founder / Leader"
+                        return {
+                            "name": resolved_name,
+                            "role": role,
+                            "email": email,
+                            "score": score,
+                            "source": "hunter_email_finder"
+                        }
+        except Exception as e:
+            print(f"[EmailEngine] Hunter email finder warning for {full_name} @ {clean_domain}: {e}", flush=True)
+        return None
+
+    @classmethod
     async def find_via_website_osint(cls, domain: str, research_text: str = "") -> Optional[Dict[str, Any]]:
         """
         Scan official website endpoints and research text for authentic, verified founder emails.
@@ -457,27 +494,59 @@ class FounderEmailEngine:
 
         print(f"[EmailEngine] [OK] Domain {clean_domain} MX Active ({mx_provider}).", flush=True)
 
+        # Step 2: Intelligent ScrapeGraph-style LLM Leadership & Product Extraction (Zero RAM)
+        intel = {}
+        try:
+            from app.intelligence.llm_router import llm_router
+            intel = await llm_router.extract_company_intelligence(research_text, clean_domain)
+            if intel.get("founder_name"):
+                print(f"[EmailEngine] LLM Extracted Leadership: {intel['founder_name']} ({intel.get('founder_role', 'Founder')})", flush=True)
+        except Exception as intele:
+            print(f"[EmailEngine] Intelligence extraction notice: {intele}", flush=True)
+
         candidate = None
 
-        # Step 2: Hunter.io API (Tier 1)
-        if hunter_api_key:
+        # Tier 1A: Direct email from LLM intelligence extraction
+        if intel.get("founder_email"):
+            em = cls.sanitize_email(intel["founder_email"])
+            if cls.is_valid_syntax(em) and not cls.is_generic_email(em):
+                candidate = {
+                    "name": intel.get("founder_name") or em.split("@")[0].title(),
+                    "role": intel.get("founder_role") or "Founder / Core Team",
+                    "email": em,
+                    "score": 92,
+                    "source": "llm_extracted_email"
+                }
+
+        # Tier 1B: Targeted Hunter Email Finder using LLM-extracted founder name
+        if not candidate and hunter_api_key and intel.get("founder_name"):
+            candidate = await cls.find_via_hunter_name(clean_domain, intel["founder_name"], hunter_api_key)
+            if candidate:
+                print(f"[EmailEngine] Found contact via Hunter Email Finder for {intel['founder_name']}: {candidate['email']}", flush=True)
+
+        # Tier 1C: Targeted Exa Search using LLM-extracted founder name
+        if not candidate and intel.get("founder_name"):
+            candidate = await cls.find_via_web_search_osint(f"{company_name} {intel['founder_name']}", clean_domain)
+
+        # Tier 2: Hunter.io Domain Search
+        if not candidate and hunter_api_key:
             candidate = await cls.find_via_hunter(clean_domain, hunter_api_key)
             if candidate:
                 print(f"[EmailEngine] Found verified contact via Hunter: {candidate['email']}", flush=True)
 
-        # Step 3: Official Website & Security.txt OSINT (Tier 2)
+        # Tier 3: Official Website & Security.txt OSINT
         if not candidate:
             candidate = await cls.find_via_website_osint(clean_domain, research_text)
             if candidate:
                 print(f"[EmailEngine] Found contact via Website OSINT: {candidate['email']}", flush=True)
 
-        # Step 4: GitHub Developer Footprint & Commits OSINT (Tier 3)
+        # Tier 4: GitHub Developer Footprint & Commits OSINT
         if not candidate:
             candidate = await cls.find_via_github_osint(company_name, clean_domain)
             if candidate:
                 print(f"[EmailEngine] Found contact via GitHub Commit OSINT: {candidate['email']}", flush=True)
 
-        # Step 5: Web Search OSINT (Tier 4)
+        # Tier 5: General Targeted Exa Neural Search
         if not candidate:
             candidate = await cls.find_via_web_search_osint(company_name, clean_domain)
             if candidate:
@@ -500,13 +569,20 @@ class FounderEmailEngine:
             score = min(100, score + 10)
             source += " + gravatar_active"
 
+        resolved_name = candidate.get("name")
+        if (not resolved_name or resolved_name.lower() in ["founder", "founder / core team", "team"]) and intel.get("founder_name"):
+            resolved_name = intel["founder_name"]
+
         return VerifiedFounderContact(
-            name=candidate.get("name", "Founder"),
+            name=resolved_name or "Founder",
             role=candidate.get("role", "Founder / Leader"),
             email=clean_email,
             domain=clean_domain,
             confidence_score=score,
             verification_source=source,
             mx_provider=mx_provider,
-            is_deliverable=True
+            is_deliverable=True,
+            company_clean_name=intel.get("company_name"),
+            product_summary=intel.get("product_summary"),
+            technical_focus=intel.get("technical_focus")
         )
