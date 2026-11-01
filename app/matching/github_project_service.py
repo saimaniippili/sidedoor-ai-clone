@@ -7,7 +7,7 @@ from typing import List, Dict, Any, Optional
 from app.matching.project_registry import VerifiedProject
 
 GITHUB_USERNAME = "saimaniippili"
-CACHE_EXPIRY_SECONDS = 3600  # 1 hour cache
+CACHE_EXPIRY_SECONDS = 300  # 1 hour cache
 
 # In-memory cache to avoid rate limits
 _GITHUB_PROJECTS_CACHE: List[VerifiedProject] = []
@@ -63,14 +63,17 @@ DOMAIN_MAP = {
 }
 
 EXCLUDED_REPOS = {
-    "github-profile", "saimaniippili.github.io", "saimani_portfolio",
-    "2200031044_jfsd_semend_exam", "prodigy_wd_01", "prodigy_wd_02",
-    "prodigy_wd_03", "prodigy_wd_04", "prodigy_wd_05",
-    "house_price_prediction-", "house_price_prediction",
-    "Hospital-Patient-Readmission-Analysis-Dashboard",
-    "HR-ANALYTICS-DASHBOARD-", "SUPPLY-CHAIN-DELAY-ANALYSIS",
-    "pocketpixels_portfolio", "serene-mindfulness-sanctuary",
-    "Recruiter-Copilot", "sidedoor-ai-clone"
+    r.lower() for r in [
+        "github-profile", "saimaniippili.github.io", "saimani_portfolio",
+        "2200031044_jfsd_semend_exam", "prodigy_wd_01", "prodigy_wd_02",
+        "prodigy_wd_03", "prodigy_wd_04", "prodigy_wd_05",
+        "house_price_prediction-", "house_price_prediction",
+        "hospital-patient-readmission-analysis-dashboard",
+        "hr-analytics-dashboard-", "hr-analytics-dashboard",
+        "supply-chain-delay-analysis",
+        "pocketpixels_portfolio", "serene-mindfulness-sanctuary",
+        "recruiter-copilot", "sidedoor-ai-clone"
+    ]
 }
 
 
@@ -96,24 +99,23 @@ class GitHubProjectService:
         projects: List[VerifiedProject] = []
         try:
             async with httpx.AsyncClient(timeout=10.0, headers=headers) as client:
-                url = f"https://api.github.com/users/{GITHUB_USERNAME}/repos?per_page=50&sort=updated"
+                # Query GitHub's /starred endpoint directly to strictly mirror repositories you have starred
+                url = f"https://api.github.com/users/{GITHUB_USERNAME}/starred?per_page=100"
                 resp = await client.get(url)
                 if resp.status_code != 200:
-                    print(f"[GitHubService] Failed to fetch repos (HTTP {resp.status_code})", flush=True)
+                    print(f"[GitHubService] Failed to fetch starred repos (HTTP {resp.status_code})", flush=True)
                     return _GITHUB_PROJECTS_CACHE
 
                 repos = resp.json()
                 for repo in repos:
                     if repo.get("fork"):
                         continue
+                    # Only include repositories authored by candidate, not external starred libraries
+                    owner = repo.get("owner", {}).get("login", "")
+                    if owner.lower() != GITHUB_USERNAME.lower():
+                        continue
                     name = repo.get("name", "")
                     if name.lower() in EXCLUDED_REPOS:
-                        continue
-
-                    # STARRED FILTER: Only include repositories you have explicitly starred (starred >= 1)
-                    # All unstarred repositories are automatically ignored.
-                    stargazers = repo.get("stargazers_count", 0)
-                    if stargazers < 1:
                         continue
 
                     # Fetch README for rich context

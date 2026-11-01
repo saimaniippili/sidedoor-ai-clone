@@ -174,9 +174,17 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
             except: pass
         role = dynamic_roles[0] if dynamic_roles else "Data Science / ML Engineer"
         
+        # Helper for canonical deduplication of projects across core registry, resume, and GitHub
+        def _canonical_proj_key(name: str) -> str:
+            clean = re.sub(r"[^a-zA-Z0-9\s]", "", name.lower())
+            for key in ["fake job", "medsage", "toxic comment", "datachat", "sidedoor", "recruiter", "remote access"]:
+                if key in clean:
+                    return key
+            return clean.split()[0] if clean else clean
+
         # Base: Core Verified Project Registry (Sidedoor, DataChat, MedSage, Fake Job Detection, etc.)
         candidate_projects = list_all_projects()
-        existing_names = {p.name.split(':')[0].strip().lower() for p in candidate_projects}
+        seen_canonical = {_canonical_proj_key(p.name) for p in candidate_projects}
 
         # Source 1: Additional Verified Resume Projects from user upload
         if user and user.extracted_projects:
@@ -184,22 +192,22 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
                 p_data = json.loads(user.extracted_projects)
                 custom_resume_projects = ResumeParser.convert_to_verified_projects(p_data)
                 for crp in custom_resume_projects:
-                    base_n = crp.name.split(':')[0].strip().lower()
-                    if base_n not in existing_names:
+                    c_key = _canonical_proj_key(crp.name)
+                    if c_key not in seen_canonical:
                         candidate_projects.append(crp)
-                        existing_names.add(base_n)
+                        seen_canonical.add(c_key)
             except Exception as e:
                 print(f"Error loading dynamic projects: {e}")
 
-        # Source 2: Dynamic Live GitHub Repositories (Filtered starred repos)
+        # Source 2: Dynamic Live GitHub Repositories (Strictly candidate's own starred repos)
         try:
             gh_projects = await GitHubProjectService.get_github_projects()
             for gp in gh_projects:
-                base_n = gp.name.split(':')[0].strip().lower()
-                if base_n not in existing_names:
+                c_key = _canonical_proj_key(gp.name)
+                if c_key not in seen_canonical:
                     candidate_projects.append(gp)
-                    existing_names.add(base_n)
-            print(f"[Pipeline] Combined Project Pool: {len(candidate_projects)} projects (Core Verified + Resume + GitHub).", flush=True)
+                    seen_canonical.add(c_key)
+            print(f"[Pipeline] Combined Project Pool: {len(candidate_projects)} projects: {[p.name.split(':')[0] for p in candidate_projects]}", flush=True)
         except Exception as ghe:
             print(f"[Pipeline] GitHub project integration warning: {ghe}", flush=True)
 
