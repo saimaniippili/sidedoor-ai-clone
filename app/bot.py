@@ -731,6 +731,49 @@ async def periodic_scouting_job(context: ContextTypes.DEFAULT_TYPE):
     finally:
         db.close()
 
+
+async def handle_search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.message.chat_id)
+    await update.message.reply_text("Hunting down the next qualified startup... 🔍")
+    asyncio.create_task(run_startup_pipeline(chat_id, context, override_limit=True))
+
+async def handle_pending_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.message.chat_id)
+    db = SessionLocal()
+    try:
+        pending_list = db.query(Outreach).filter(Outreach.status == "pending").order_by(Outreach.id.desc()).limit(5).all()
+        if not pending_list:
+            await update.message.reply_text("✅ No pending drafts waiting.")
+            return
+        await update.message.reply_text(f"📋 Recovered {len(pending_list)} pending draft(s):")
+        for out in reversed(pending_list):
+            opp = db.query(Opportunity).filter(Opportunity.id == out.opportunity_id).first()
+            founder = db.query(Founder).filter(Founder.id == opp.founder_id).first() if opp else None
+            comp = db.query(Company).filter(Company.id == opp.company_id).first() if opp else None
+            if not founder or not comp:
+                continue
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ Send via Gmail", callback_data=f"send_{out.id}"),
+                    InlineKeyboardButton("❌ Skip", callback_data=f"skip_{out.id}")
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            msg_body = (
+                f"🎯 **Target Found: {comp.name}** ({comp.domain})\n"
+                f"👤 **Recipient:** {founder.name} (Founder / Leader)\n"
+                f"📧 **Deliverable Email:** `{founder.email}`\n"
+                f"📐 **Framework:** `{out.framework}`\n\n"
+                f"**Subject:** {out.email_subject}\n\n"
+                f"{out.email_body}"
+            )
+            try:
+                await context.bot.send_message(chat_id=chat_id, text=msg_body, reply_markup=reply_markup, parse_mode="Markdown")
+            except Exception:
+                await context.bot.send_message(chat_id=chat_id, text=msg_body, reply_markup=reply_markup)
+    finally:
+        db.close()
+
 def main():
     threading.Thread(target=start_health_server, daemon=True).start()
 
@@ -750,6 +793,9 @@ def main():
         print("WARNING: JobQueue not initialized")
     
     app.add_handler(CommandHandler("start", handle_start))
+    app.add_handler(CommandHandler("pending", handle_pending_command))
+    app.add_handler(CommandHandler("drafts", handle_pending_command))
+    app.add_handler(CommandHandler("search", handle_search_command))
     app.add_handler(MessageHandler(filters.Document.PDF, handle_resume))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(button_callback))
