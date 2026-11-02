@@ -521,6 +521,50 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Hunting down the next qualified startup... 🔍")
         asyncio.create_task(run_startup_pipeline(chat_id, context, override_limit=True))
         return
+
+    if text.lower() in ["pending", "drafts", "/pending", "/drafts"]:
+        db = SessionLocal()
+        try:
+            pending_list = db.query(Outreach).filter(Outreach.status == "pending").order_by(Outreach.id.desc()).limit(5).all()
+            if not pending_list:
+                await update.message.reply_text("✅ No pending drafts waiting.")
+                return
+            await update.message.reply_text(f"📋 Recovered {len(pending_list)} pending draft(s):")
+            for out in reversed(pending_list):
+                opp = db.query(Opportunity).filter(Opportunity.id == out.opportunity_id).first()
+                founder = db.query(Founder).filter(Founder.id == opp.founder_id).first() if opp else None
+                comp = db.query(Company).filter(Company.id == opp.company_id).first() if opp else None
+                if not founder or not comp:
+                    continue
+                keyboard = [
+                    [
+                        InlineKeyboardButton("✅ Send via Gmail", callback_data=f"send_{out.id}"),
+                        InlineKeyboardButton("❌ Skip", callback_data=f"skip_{out.id}")
+                    ]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                msg_body = (
+                    f"🎯 **Target Found: {comp.name}** ({comp.domain})
+"
+                    f"👤 **Recipient:** {founder.name} ({founder.title or 'Founder'})
+"
+                    f"📧 **Deliverable Email:** `{founder.email}`
+"
+                    f"📐 **Framework:** `{out.framework}`
+
+"
+                    f"**Subject:** {out.email_subject}
+
+"
+                    f"{out.email_body}"
+                )
+                try:
+                    await context.bot.send_message(chat_id=chat_id, text=msg_body, reply_markup=reply_markup, parse_mode="Markdown")
+                except Exception:
+                    await context.bot.send_message(chat_id=chat_id, text=msg_body, reply_markup=reply_markup)
+            return
+        finally:
+            db.close()
         
     db = SessionLocal()
     db.add(ChatHistory(chat_id=chat_id, role="user", content=text))
@@ -606,7 +650,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
             # Check Gmail authentication
             if not GmailManager.is_authenticated() and not config.dry_run:
-                await query.edit_message_text("⚠️ Gmail is not authorized. Please generate token.json using `python generate_token.py` on your machine.")
+                try:
+                    await query.answer("⚠️ Gmail is not authorized yet. Draft preserved!", show_alert=True)
+                except Exception:
+                    pass
+                await context.bot.send_message(
+                    chat_id=query.message.chat_id,
+                    text="⚠️ Gmail is not authorized yet. Your draft above has been preserved! Run `python generate_token.py` on your machine to authorize, then click 'Send via Gmail' again."
+                )
                 return
                 
             send_res = GmailManager.send_email(
@@ -642,7 +693,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Automatically search for the next startup without waiting for user prompt
                 asyncio.create_task(run_startup_pipeline(str(query.message.chat_id), context))
             else:
-                await query.edit_message_text("❌ Failed to send via Gmail. Check your credentials.")
+                try:
+                    await query.answer("❌ Failed to send via Gmail. Draft preserved!", show_alert=True)
+                except Exception:
+                    pass
+                await context.bot.send_message(
+                    chat_id=query.message.chat_id,
+                    text="❌ Failed to send via Gmail. Your draft above has been preserved. Please check console or token."
+                )
                 
         elif action == "skip":
             outreach.status = "skipped"

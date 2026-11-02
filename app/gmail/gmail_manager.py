@@ -22,57 +22,54 @@ class GmailManager:
     """Production-grade Gmail client that handles token refreshing safely
     without blocking headless execution or crashing on expired credentials.
     """
-    
-    @classmethod
-    def _find_file(cls, filename: str) -> Optional[str]:
-        # 1. Direct local path
-        if os.path.exists(filename):
-            return filename
-        # 2. Render Docker secret files mount path (/etc/secrets/<filename>)
-        render_path = os.path.join("/etc/secrets", filename)
-        if os.path.exists(render_path):
-            return render_path
-        # 3. /app directory path
-        app_path = os.path.join("/app", filename)
-        if os.path.exists(app_path):
-            return app_path
-        return None
+    _CACHED_CREDS = None
 
     @classmethod
-    def get_credentials(cls) -> Optional[Credentials]:
-        token_path = cls._find_file(TOKEN_FILE)
-        if not token_path:
-            # Check environment variable fallback
-            token_env = os.environ.get("GMAIL_TOKEN_JSON") or os.environ.get("TOKEN_JSON")
-            if token_env:
+    def get_credentials(cls):
+        if cls._CACHED_CREDS:
+            if cls._CACHED_CREDS.valid:
+                return cls._CACHED_CREDS
+            if cls._CACHED_CREDS.expired and cls._CACHED_CREDS.refresh_token:
                 try:
-                    token_info = json.loads(token_env)
-                    creds = Credentials.from_authorized_user_info(token_info, SCOPES)
-                    if creds and creds.expired and creds.refresh_token:
-                        creds.refresh(Request())
-                    return creds if (creds and creds.valid) else None
-                except Exception as e:
-                    print(f"[GmailManager] Error parsing GMAIL_TOKEN_JSON env var: {e}", flush=True)
-            print(f"[GmailManager] token.json not found in ., /etc/secrets, or /app", flush=True)
-            return None
-            
-        try:
-            creds = Credentials.from_authorized_user_file(token_path, SCOPES)
-            if creds and creds.expired and creds.refresh_token:
+                    cls._CACHED_CREDS.refresh(Request())
+                    if cls._CACHED_CREDS.valid:
+                        return cls._CACHED_CREDS
+                except Exception:
+                    cls._CACHED_CREDS = None
+
+        candidate_sources = []
+        token_env = os.environ.get("GMAIL_TOKEN_JSON") or os.environ.get("TOKEN_JSON")
+        if token_env:
+            try:
+                candidate_sources.append(("env", json.loads(token_env)))
+            except Exception:
+                pass
+
+        for path_opt in [TOKEN_FILE, os.path.join("/etc/secrets", TOKEN_FILE), os.path.join("/app", TOKEN_FILE)]:
+            if os.path.exists(path_opt):
                 try:
-                    creds.refresh(Request())
+                    with open(path_opt, "r", encoding="utf-8") as f:
+                        candidate_sources.append((path_opt, json.load(f)))
+                except Exception:
+                    pass
+
+        for src_name, token_info in candidate_sources:
+            try:
+                creds = Credentials.from_authorized_user_info(token_info, SCOPES)
+                if creds and creds.expired and creds.refresh_token:
                     try:
-                        with open(TOKEN_FILE, "w", encoding="utf-8") as token:
-                            token.write(creds.to_json())
-                    except Exception:
-                        pass
-                except RefreshError as e:
-                    print(f"[GmailManager] Refresh token expired or revoked: {e}", flush=True)
-                    return None
-            return creds if (creds and creds.valid) else None
-        except Exception as e:
-            print(f"[GmailManager] Error reading token file {token_path}: {e}", flush=True)
-            return None
+                        creds.refresh(Request())
+                    except Exception as re_err:
+                        print(f"[GmailManager] Refresh failed for {src_name}: {re_err}", flush=True)
+                        continue
+                if creds and creds.valid:
+                    cls._CACHED_CREDS = creds
+                    return creds
+            except Exception as e:
+                print(f"[GmailManager] Error initializing creds from {src_name}: {e}", flush=True)
+
+        print("[GmailManager] No valid Gmail credentials found in env or files.", flush=True)
+        return None
 
     @classmethod
     def is_authenticated(cls) -> bool:
