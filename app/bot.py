@@ -544,18 +544,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 msg_body = (
-                    f"🎯 **Target Found: {comp.name}** ({comp.domain})
-"
-                    f"👤 **Recipient:** {founder.name} ({founder.title or 'Founder'})
-"
-                    f"📧 **Deliverable Email:** `{founder.email}`
-"
-                    f"📐 **Framework:** `{out.framework}`
-
-"
-                    f"**Subject:** {out.email_subject}
-
-"
+                    f"🎯 **Target Found: {comp.name}** ({comp.domain})\n"
+                    f"👤 **Recipient:** {founder.name} ({founder.title or 'Founder'})\n"
+                    f"📧 **Deliverable Email:** `{founder.email}`\n"
+                    f"📐 **Framework:** `{out.framework}`\n\n"
+                    f"**Subject:** {out.email_subject}\n\n"
                     f"{out.email_body}"
                 )
                 try:
