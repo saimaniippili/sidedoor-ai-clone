@@ -487,6 +487,202 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(welcome_text)
     asyncio.create_task(run_startup_pipeline(chat_id, context))
 
+
+async def process_custom_target(chat_id: str, raw_input: str, context: ContextTypes.DEFAULT_TYPE):
+    """Processes an on-demand custom target URL or email sent by the user,
+    gathers intelligence, scores against verified projects, and produces an approval draft.
+    """
+    import json
+    import re
+    from urllib.parse import urlparse
+    from app.matching.github_project_service import GitHubProjectService
+    from app.matching.project_scorer import ProjectScorer
+    from app.matching.framework_selector import OutreachFrameworkSelector
+    from app.outreach.email_generator import EmailGenerator
+
+    clean_input = re.sub(r"^/?[dD]raft[:\s]*", "", raw_input).strip()
+    email_match = re.search(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+', clean_input)
+    url_match = re.search(r'https?://[^\s]+', clean_input)
+
+    target_email = email_match.group(0).lower().strip() if email_match else None
+    target_url = url_match.group(0).strip() if url_match else None
+
+    domain = None
+    if target_email:
+        domain = target_email.split('@')[1].strip().lower()
+    elif target_url:
+        parsed = urlparse(target_url if "://" in target_url else "https://" + target_url)
+        domain = parsed.netloc or parsed.path.split("/")[0]
+        domain = re.sub(r"^www\.", "", domain).lower()
+    else:
+        dom_match = re.search(r'\b([a-zA-Z0-9-]+\.(?:com|ai|io|in|co|org|net|tech|dev|app|xyz))\b', clean_input, re.I)
+        if dom_match:
+            domain = dom_match.group(1).lower()
+
+    if not domain:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="❌ Could not detect a valid website domain or email address. Please send a URL (e.g. `https://company.ai`) or email (e.g. `founder@company.ai`)."
+        )
+        return
+
+    status_msg = await context.bot.send_message(
+        chat_id=chat_id,
+        text=f"🎯 Target Received: `{domain}`\n🔍 Gathering company intelligence and leadership details..."
+    )
+
+    # Check MX mail servers
+    has_mx, mx_provider, _ = await EmailEngine.check_domain_mx(domain)
+
+    # Research company via Exa
+    research_text = ""
+    try:
+        exa = Exa(api_key=config.exa_api_key)
+        query = f'site:{domain} OR "{domain}" what we do products about leadership'
+        exa_res = exa.search_and_contents(
+            query,
+            type="neural",
+            num_results=3,
+            text=True
+        )
+        for res in exa_res.results:
+            if res.text:
+                research_text += f"\n--- {res.title or ''} ---\n{res.text[:1200]}\n"
+    except Exception as e:
+        print(f"[CustomTarget] Exa search error: {e}", flush=True)
+
+    # Extract company intelligence
+    intel = await LLMRouter.extract_company_intelligence(domain, research_text[:3500])
+    company_name = intel.get("company_name") or domain.split(".")[0].title()
+    company_desc = intel.get("summary") or f"Technology company operating at {domain} focusing on AI, machine learning, and scalable software platforms."
+    founder_name = intel.get("founder_name") or "Founder"
+    founder_role = intel.get("founder_role") or "Founder & Technical Lead"
+
+    # Determine email address
+    final_email = target_email
+    if not final_email:
+        candidate_target = await EmailEngine.discover_and_verify(
+            company_name=company_name,
+            domain=domain,
+            research_text=research_text,
+            hunter_api_key=config.hunter_api_key
+        )
+        if candidate_target and candidate_target.get("email"):
+            final_email = candidate_target.get("email")
+            if candidate_target.get("name"):
+                founder_name = candidate_target.get("name")
+            if candidate_target.get("role"):
+                founder_role = candidate_target.get("role")
+        else:
+            final_email = f"founder@{domain}"
+
+    # Extract founder name if user provided a specific handle
+    if target_email and founder_name in ["Founder", "Executive", ""]:
+        handle = target_email.split("@")[0].split(".")[0]
+        if len(handle) >= 3 and handle.isalpha():
+            founder_name = handle.title()
+
+    # Project Matching across verified projects
+    core_projects = ProjectRegistry.get_all_projects()
+    gh_projects = await GitHubProjectService.get_github_projects()
+    all_projects = core_projects + [p for p in gh_projects if p.project_id not in [x.project_id for x in core_projects]]
+
+    best_project, signals = ProjectScorer.score_and_match(company_desc, all_projects)
+    framework = OutreachFrameworkSelector.select_framework(company_desc, best_project)
+
+    db = SessionLocal()
+    try:
+        user = db.query(ActiveUser).filter(ActiveUser.chat_id == chat_id).first()
+        cand_name = user.candidate_name if (user and user.candidate_name) else "Saimani Ippili"
+        target_role = "Data Science / ML Engineer"
+
+        subject, body = await EmailGenerator.generate_initial_draft(
+            company_name=company_name,
+            company_description=company_desc,
+            founder_name=founder_name,
+            role_target=target_role,
+            selected_framework=framework,
+            best_project=best_project,
+            project_signals=signals,
+            candidate_name=cand_name
+        )
+
+        comp = db.query(Company).filter(Company.domain == domain).first()
+        if not comp:
+            comp = Company(
+                name=company_name,
+                domain=domain,
+                description=company_desc[:500],
+                niche=best_project.primary_domain,
+                location="Remote / Target"
+            )
+            db.add(comp)
+            db.commit()
+            db.refresh(comp)
+
+        fndr = db.query(Founder).filter(Founder.email == final_email).first()
+        if not fndr:
+            fndr = Founder(
+                company_id=comp.id,
+                name=founder_name,
+                role=founder_role,
+                email=final_email,
+                confidence_score=95 if target_email else 85,
+                verification_source="manual_target"
+            )
+            db.add(fndr)
+            db.commit()
+            db.refresh(fndr)
+
+        opp = Opportunity(
+            company_id=comp.id,
+            founder_id=fndr.id,
+            potential_role=target_role,
+            fit_reason=f"Direct on-demand request for {domain}"
+        )
+        db.add(opp)
+        db.commit()
+        db.refresh(opp)
+
+        outreach = Outreach(
+            opportunity_id=opp.id,
+            framework=framework,
+            selected_project_ids=json.dumps([best_project.project_id]),
+            candidate_evidence=best_project.summary,
+            email_subject=subject,
+            email_body=body,
+            status="pending"
+        )
+        db.add(outreach)
+        db.commit()
+        db.refresh(outreach)
+
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Send via Gmail", callback_data=f"send_{outreach.id}"),
+                InlineKeyboardButton("❌ Skip", callback_data=f"skip_{outreach.id}")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        draft_msg = (
+            f"🎯 **Target Processed: {company_name}** ({domain})\n"
+            f"👤 **Recipient:** {founder_name} ({founder_role})\n"
+            f"📧 **Deliverable Email:** `{final_email}`\n"
+            f"🛡️ **Verification:** (on_demand | MX: {mx_provider} | {'Active MX ✅' if has_mx else 'No MX ⚠️'})\n"
+            f"📐 **Framework:** `{framework}`\n"
+            f"💡 **Matched Project:** `{best_project.name}`\n\n"
+            f"**Subject:** {subject}\n\n"
+            f"{body}"
+        )
+
+        try:
+            await status_msg.edit_text(draft_msg, reply_markup=reply_markup, parse_mode="Markdown")
+        except Exception:
+            await status_msg.edit_text(draft_msg, reply_markup=reply_markup)
+    finally:
+        db.close()
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.message.chat_id)
     text = update.message.text.strip()
@@ -520,6 +716,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text.lower() in ["keep searching", "search", "more"]:
         await update.message.reply_text("Hunting down the next qualified startup... 🔍")
         asyncio.create_task(run_startup_pipeline(chat_id, context, override_limit=True))
+        return
+
+    # Check if user sent an email address or website URL directly or with /draft
+    clean_target = re.sub(r"^/?[dD]raft[:\s]*", "", text).strip()
+    is_email = bool(re.search(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+', clean_target))
+    is_url = bool(re.search(r'https?://[^\s]+', clean_target) or re.search(r'\b[a-zA-Z0-9-]+\.(?:com|ai|io|in|co|org|net|tech|dev|app|xyz)\b', clean_target, re.I))
+
+    if text.lower().startswith("/draft") or text.lower().startswith("draft ") or (is_email or is_url):
+        asyncio.create_task(process_custom_target(chat_id, text, context))
         return
 
     if text.lower() in ["pending", "drafts", "/pending", "/drafts"]:
@@ -774,6 +979,16 @@ async def handle_pending_command(update: Update, context: ContextTypes.DEFAULT_T
     finally:
         db.close()
 
+
+async def handle_draft_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.message.chat_id)
+    args = context.args
+    if not args:
+        await update.message.reply_text("💡 Please provide a link or email address, e.g.:\n`/draft https://company.ai`\nor\n`/draft founder@company.ai`", parse_mode="Markdown")
+        return
+    raw_input = " ".join(args)
+    asyncio.create_task(process_custom_target(chat_id, raw_input, context))
+
 def main():
     threading.Thread(target=start_health_server, daemon=True).start()
 
@@ -796,6 +1011,7 @@ def main():
     app.add_handler(CommandHandler("pending", handle_pending_command))
     app.add_handler(CommandHandler("drafts", handle_pending_command))
     app.add_handler(CommandHandler("search", handle_search_command))
+    app.add_handler(CommandHandler("draft", handle_draft_command))
     app.add_handler(MessageHandler(filters.Document.PDF, handle_resume))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(button_callback))
