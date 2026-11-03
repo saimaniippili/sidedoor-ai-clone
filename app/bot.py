@@ -301,151 +301,157 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
                 skipped_seen += 1
                 continue
                 
-            print(f"[Pipeline] Checking {company_name} ({domain})...", flush=True)
-            
-            # 1. Multi-Tier Open-Source & API Founder Discovery Engine (Zero Bounces Standard)
-            verified_contact = await FounderEmailEngine.discover_and_verify(
-                company_name=company_name,
-                domain=domain,
-                research_text=research_text,
-                hunter_api_key=config.hunter_api_key
-            )
-            
-            if not verified_contact:
-                print(f"[Pipeline] No verified deliverable email found for {company_name} ({domain}) - skipping to prevent bounces.", flush=True)
-                skipped_no_email += 1
-                continue
-                
-            target_email = verified_contact.email
-            founder_name = verified_contact.name
-            founder_role = verified_contact.role
-            verified_score = verified_contact.confidence_score
-            verification_source = verified_contact.verification_source
-            mx_provider = verified_contact.mx_provider
-
-            if not target_email or target_email.lower() in avoid_emails:
-                skipped_no_email += 1
-                continue
-                
-            # Check if founder already outreach in db
-            if db.query(Founder).filter(Founder.email == target_email).first():
-                continue
-                
-            # Enrich company data from LLM intelligence extraction if available
-            if verified_contact.company_clean_name and len(verified_contact.company_clean_name) > 2:
-                company_name = verified_contact.company_clean_name
-            if verified_contact.product_summary and len(verified_contact.product_summary) > 20:
-                research_text = verified_contact.product_summary
-
-            tech_context = " ".join(verified_contact.technical_focus or [])
-            # 2. Dynamic Project Matching Engine using candidate's actual projects (Resume + Starred GitHub)
-            scored_projects = ProjectScorer.select_best_projects(
-                company_text=f"{company_name} {research_text} {tech_context}",
-                role_title=role,
-                max_projects=1,
-                candidate_projects=candidate_projects
-            )
-            best_project, match_score, signals = scored_projects[0]
-            
-            # 3. Dynamic Framework Selection
-            framework, reason = OutreachFrameworkSelector.select_framework(
-                company_name=company_name,
-                company_description=research_text,
-                best_project=best_project,
-                match_score=match_score
-            )
-            
-            if framework == "NOT_TO_SEND":
-                print(f"[Pipeline] Skipping {company_name}: Low relevance match score ({match_score}).", flush=True)
-                continue
-                
-            # Persist company and founder
-            company = Company(name=company_name, domain=domain, location=location, description=research_text[:500], status="QUALIFIED")
-            db.add(company)
-            db.commit()
-            db.refresh(company)
-            
-            # Immediately record in SuppressionRecord so it is NEVER processed or queried again
-            if not db.query(SuppressionRecord).filter(SuppressionRecord.domain == domain).first():
-                db.add(SuppressionRecord(domain=domain, email=target_email, reason="drafted"))
-                db.commit()
-            
-            founder = Founder(
-                company_id=company.id,
-                name=founder_name,
-                role=founder_role,
-                email=target_email,
-                email_verified=1,
-                verification_score=float(verified_score) / 100.0 if verified_score else 0.95
-            )
-            db.add(founder)
-            db.commit()
-            db.refresh(founder)
-            
-            opp = Opportunity(
-                chat_id=chat_id,
-                company_id=company.id,
-                founder_id=founder.id,
-                match_score=int(match_score * 100),
-                opportunity_reason=f"Framework: {framework} | Signals: {', '.join(signals)}",
-                potential_role=role
-            )
-            db.add(opp)
-            db.commit()
-            db.refresh(opp)
-            
-            # Generate email using selected framework and verified project
-            subject, body = await EmailGenerator.generate_initial_draft(
-                company_name=company_name,
-                company_description=research_text[:1000],
-                founder_name=founder_name,
-                role_target=role,
-                selected_framework=framework,
-                best_project=best_project,
-                project_signals=signals,
-                candidate_name=cand_name
-            )
-            
-            outreach = Outreach(
-                opportunity_id=opp.id,
-                framework=framework,
-                selected_project_ids=json.dumps([best_project.project_id]),
-                candidate_evidence=best_project.summary,
-                email_subject=subject,
-                email_body=body,
-                status="pending"
-            )
-            db.add(outreach)
-            db.commit()
-            db.refresh(outreach)
-            
-            # Send sample draft to Telegram with human approval buttons
-            score_badge = f"({verification_source} | MX: {mx_provider} | {verified_score}% Confidence 🛡️)"
-            draft_msg = (
-                f"🎯 **Target Found: {company_name}** ({domain})\n"
-                f"👤 **Recipient:** {founder_name} ({founder_role})\n"
-                f"📬 **Deliverable Email:** `{target_email}`\n"
-                f"🛡️ **Verification:** {score_badge}\n"
-                f"📐 **Framework:** `{framework}` (Score: {opp.match_score}/100)\n"
-                f"💡 **Matched Project:** `{best_project.name}`\n\n"
-                f"**Subject:** {outreach.email_subject}\n\n"
-                f"{outreach.email_body}"
-            )
-            
-            keyboard = [
-                [
-                    InlineKeyboardButton("✅ Send via Gmail", callback_data=f"send_{outreach.id}"),
-                    InlineKeyboardButton("❌ Skip", callback_data=f"skip_{outreach.id}")
-                ]
-            ]
             try:
-                await context.bot.send_message(chat_id=chat_id, text=draft_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-            except Exception as send_err:
-                print(f"[Telegram] Markdown send failed ({send_err}); sending plain text fallback", flush=True)
-                await context.bot.send_message(chat_id=chat_id, text=draft_msg, reply_markup=InlineKeyboardMarkup(keyboard))
-            print(f"[Pipeline] Draft sent to user {chat_id}!", flush=True)
-            found_match = True
-            break
+                # Gentle rate-limit pause between candidates to prevent API throttling
+                await asyncio.sleep(1.0)
+                print(f"[Pipeline] Checking {company_name} ({domain})...", flush=True)
+                
+                # 1. Multi-Tier Open-Source & API Founder Discovery Engine (Zero Bounces Standard)
+                verified_contact = await FounderEmailEngine.discover_and_verify(
+                    company_name=company_name,
+                    domain=domain,
+                    research_text=research_text,
+                    hunter_api_key=config.hunter_api_key
+                )
+                
+                if not verified_contact:
+                    print(f"[Pipeline] No verified deliverable email found for {company_name} ({domain}) - skipping to prevent bounces.", flush=True)
+                    skipped_no_email += 1
+                    continue
+                    
+                target_email = verified_contact.email
+                founder_name = verified_contact.name
+                founder_role = verified_contact.role
+                verified_score = verified_contact.confidence_score
+                verification_source = verified_contact.verification_source
+                mx_provider = verified_contact.mx_provider
+    
+                if not target_email or target_email.lower() in avoid_emails:
+                    skipped_no_email += 1
+                    continue
+                    
+                # Check if founder already outreach in db
+                if db.query(Founder).filter(Founder.email == target_email).first():
+                    continue
+                    
+                # Enrich company data from LLM intelligence extraction if available
+                if verified_contact.company_clean_name and len(verified_contact.company_clean_name) > 2:
+                    company_name = verified_contact.company_clean_name
+                if verified_contact.product_summary and len(verified_contact.product_summary) > 20:
+                    research_text = verified_contact.product_summary
+    
+                tech_context = " ".join(verified_contact.technical_focus or [])
+                # 2. Dynamic Project Matching Engine using candidate's actual projects (Resume + Starred GitHub)
+                scored_projects = ProjectScorer.select_best_projects(
+                    company_text=f"{company_name} {research_text} {tech_context}",
+                    role_title=role,
+                    max_projects=1,
+                    candidate_projects=candidate_projects
+                )
+                best_project, match_score, signals = scored_projects[0]
+                
+                # 3. Dynamic Framework Selection
+                framework, reason = OutreachFrameworkSelector.select_framework(
+                    company_name=company_name,
+                    company_description=research_text,
+                    best_project=best_project,
+                    match_score=match_score
+                )
+                
+                if framework == "NOT_TO_SEND":
+                    print(f"[Pipeline] Skipping {company_name}: Low relevance match score ({match_score}).", flush=True)
+                    continue
+                    
+                # Persist company and founder
+                company = Company(name=company_name, domain=domain, location=location, description=research_text[:500], status="QUALIFIED")
+                db.add(company)
+                db.commit()
+                db.refresh(company)
+                
+                # Immediately record in SuppressionRecord so it is NEVER processed or queried again
+                if not db.query(SuppressionRecord).filter(SuppressionRecord.domain == domain).first():
+                    db.add(SuppressionRecord(domain=domain, email=target_email, reason="drafted"))
+                    db.commit()
+                
+                founder = Founder(
+                    company_id=company.id,
+                    name=founder_name,
+                    role=founder_role,
+                    email=target_email,
+                    email_verified=1,
+                    verification_score=float(verified_score) / 100.0 if verified_score else 0.95
+                )
+                db.add(founder)
+                db.commit()
+                db.refresh(founder)
+                
+                opp = Opportunity(
+                    chat_id=chat_id,
+                    company_id=company.id,
+                    founder_id=founder.id,
+                    match_score=int(match_score * 100),
+                    opportunity_reason=f"Framework: {framework} | Signals: {', '.join(signals)}",
+                    potential_role=role
+                )
+                db.add(opp)
+                db.commit()
+                db.refresh(opp)
+                
+                # Generate email using selected framework and verified project
+                subject, body = await EmailGenerator.generate_initial_draft(
+                    company_name=company_name,
+                    company_description=research_text[:1000],
+                    founder_name=founder_name,
+                    role_target=role,
+                    selected_framework=framework,
+                    best_project=best_project,
+                    project_signals=signals,
+                    candidate_name=cand_name
+                )
+                
+                outreach = Outreach(
+                    opportunity_id=opp.id,
+                    framework=framework,
+                    selected_project_ids=json.dumps([best_project.project_id]),
+                    candidate_evidence=best_project.summary,
+                    email_subject=subject,
+                    email_body=body,
+                    status="pending"
+                )
+                db.add(outreach)
+                db.commit()
+                db.refresh(outreach)
+                
+                # Send sample draft to Telegram with human approval buttons
+                score_badge = f"({verification_source} | MX: {mx_provider} | {verified_score}% Confidence 🛡️)"
+                draft_msg = (
+                    f"🎯 **Target Found: {company_name}** ({domain})\n"
+                    f"👤 **Recipient:** {founder_name} ({founder_role})\n"
+                    f"📬 **Deliverable Email:** `{target_email}`\n"
+                    f"🛡️ **Verification:** {score_badge}\n"
+                    f"📐 **Framework:** `{framework}` (Score: {opp.match_score}/100)\n"
+                    f"💡 **Matched Project:** `{best_project.name}`\n\n"
+                    f"**Subject:** {outreach.email_subject}\n\n"
+                    f"{outreach.email_body}"
+                )
+                
+                keyboard = [
+                    [
+                        InlineKeyboardButton("✅ Send via Gmail", callback_data=f"send_{outreach.id}"),
+                        InlineKeyboardButton("❌ Skip", callback_data=f"skip_{outreach.id}")
+                    ]
+                ]
+                try:
+                    await context.bot.send_message(chat_id=chat_id, text=draft_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+                except Exception as send_err:
+                    print(f"[Telegram] Markdown send failed ({send_err}); sending plain text fallback", flush=True)
+                    await context.bot.send_message(chat_id=chat_id, text=draft_msg, reply_markup=InlineKeyboardMarkup(keyboard))
+                print(f"[Pipeline] Draft sent to user {chat_id}!", flush=True)
+                found_match = True
+                break
+            except Exception as cand_err:
+                print(f"[Pipeline Warning] Error evaluating {company_name} ({domain}): {cand_err}. Continuing to next startup...", flush=True)
+                continue
             
         if not found_match:
             # Strict Priority Order: Hyderabad -> Bangalore -> Chennai -> (only worst case: Pune, Delhi NCR, Mumbai)

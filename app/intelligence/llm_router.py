@@ -1,5 +1,6 @@
 import re
 import json
+import asyncio
 from typing import Optional, Dict, Any
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
@@ -35,7 +36,6 @@ class LLMRouter:
         
         # If wrapped in markdown code blocks
         if "```" in text:
-            # Extract json or text inside block
             match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
             if match:
                 text = match.group(1)
@@ -47,7 +47,7 @@ class LLMRouter:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
         
-        # Try OpenRouter first if configured
+        # 1. Try OpenRouter first if configured
         if self.openrouter_client:
             try:
                 resp = await self.openrouter_client.chat.completions.create(
@@ -56,22 +56,41 @@ class LLMRouter:
                     temperature=temperature,
                     max_tokens=max_tokens
                 )
-                return self.clean_output(resp.choices[0].message.content)
+                choice = resp.choices[0].message
+                content = choice.content or ""
+                if content:
+                    return self.clean_output(content)
             except Exception as e:
-                print(f"[LLMRouter] OpenRouter failed ({e}). Falling back to Nvidia NIM...")
+                print(f"[LLMRouter] OpenRouter failed ({e}). Falling back to Nvidia NIM...", flush=True)
                 
-        # Primary / Fallback: Nvidia NIM
+        # 2. Primary / Fallback: Nvidia NIM with automatic 429 exponential backoff
         if self.nvidia_client:
-            resp = await self.nvidia_client.chat.completions.create(
-                model=config.nvidia_model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                extra_body={"chat_template_kwargs": {"enable_thinking": False}}
-            )
-            return self.clean_output(resp.choices[0].message.content)
-            
-        raise ValueError("No LLM client configured (both NVIDIA_API_KEY and OPENROUTER_API_KEY are missing).")
+            for attempt in range(1, 4):
+                try:
+                    resp = await self.nvidia_client.chat.completions.create(
+                        model=config.nvidia_model,
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        extra_body={"chat_template_kwargs": {"enable_thinking": False}}
+                    )
+                    choice = resp.choices[0].message
+                    content = choice.content or getattr(choice, "reasoning_content", None) or ""
+                    if content:
+                        return self.clean_output(content)
+                except Exception as ne:
+                    err_str = str(ne)
+                    if "429" in err_str or "rate" in err_str.lower() or "too many" in err_str.lower():
+                        wait_time = 2.0 * attempt
+                        print(f"[LLMRouter] Nvidia NIM 429 rate limit encountered (attempt {attempt}/3). Backing off for {wait_time}s...", flush=True)
+                        await asyncio.sleep(wait_time)
+                    else:
+                        print(f"[LLMRouter] Nvidia NIM call error: {ne}", flush=True)
+                        break
+
+        # 3. Emergency Fallback: If both fail, return concise fallback response rather than crashing
+        print("[LLMRouter] Warning: Both primary and fallback LLM requests exhausted. Returning fallback output.", flush=True)
+        return "Early-stage AI/ML technology company developing intelligent automation and software platforms."
 
     async def extract_company_intelligence(self, page_text: str, domain: str) -> Dict[str, Any]:
         """
