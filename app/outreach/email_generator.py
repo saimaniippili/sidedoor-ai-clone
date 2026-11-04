@@ -122,7 +122,25 @@ Portfolio: https://personal-portfolio-chi-bay-62.vercel.app/
         # Clean any remaining JSON brackets if any exist
         if body.startswith("{"): body = body[1:].strip()
         if body.endswith("}"): body = body[:-1].strip()
-        
+
+        # Validation Guard: Guarantee complete, professional 3-paragraph email body
+        words = body.split()
+        generic_names = {'team', 'partnerships', 'careers', 'info', 'hello', 'executive', 'admin', 'contact', 'support'}
+        clean_first = founder_name.split()[0] if founder_name and founder_name.lower().strip() not in generic_names else 'there'
+
+        if len(words) < 25 or not any(k in body.lower() for k in ["hey ", "hello ", "hi "]) or "best," not in body.lower():
+            greeting = f"Hey {clean_first},"
+            clean_desc = company_description.strip() if company_description else "intelligent AI systems and scalable software platforms"
+            if len(clean_desc) > 120:
+                clean_desc = clean_desc[:120].rsplit(" ", 1)[0] + "..."
+            p1 = f"I've been following {company_name}'s work in {clean_desc} — building innovative tech in this space is no small feat."
+            tech_str = ", ".join(best_project.technologies[:4]) if best_project.technologies else "modern AI stacks"
+            p2 = f"I recently engineered {clean_project_name}, {best_project.summary}. With hands-on implementations across {tech_str}, the architecture directly aligns with the technical and engineering challenges your team tackles."
+            p3 = f"Do you have 15 minutes to chat about potential {role_target} roles?"
+            signoff = f"Best,\n{candidate_name}\nPortfolio: https://personal-portfolio-chi-bay-62.vercel.app/"
+            body = f"{greeting}\n\n{p1}\n\n{p2}\n\n{p3}\n\n{signoff}"
+            subj = f"{role_target} — {clean_project_name} & {company_name}"
+
         return subj, body
 
     @classmethod
