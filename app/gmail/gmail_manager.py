@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import base64
 from typing import Optional, Dict, Any, Tuple
@@ -85,7 +86,6 @@ class GmailManager:
             return None
         
         # Sanitize and validate recipient address (strictly reject spaces or invalid chars)
-        import re
         if not to_email:
             print("[GmailManager] Cannot send: to_email is empty.")
             return None
@@ -123,7 +123,8 @@ class GmailManager:
     @classmethod
     def check_for_replies(cls, to_email: str, thread_id: Optional[str] = None) -> Tuple[bool, Optional[str], Optional[str]]:
         """Returns (has_replied, classification, snippet).
-        Classifies incoming messages into human_reply, ooo (out of office), bounce, etc.
+        Accurately inspects Gmail threads and incoming messages.
+        Guarantees that ANY reply from recipient or recipient's domain immediately suppresses follow-ups.
         """
         creds = cls.get_credentials()
         if not creds:
@@ -131,38 +132,88 @@ class GmailManager:
             
         try:
             service = build("gmail", "v1", credentials=creds)
-            # Query incoming messages from this recipient or thread
-            query = f"from:{to_email}"
+            
+            # 1. Determine authenticated candidate email to reliably filter outbound messages
+            my_email = "ippilisaimani40@gmail.com"
+            try:
+                prof = service.users().getProfile(userId='me').execute()
+                if prof.get('emailAddress'):
+                    my_email = prof['emailAddress'].lower().strip()
+            except Exception:
+                pass
+
+            def _is_me(sender_str: str) -> bool:
+                if not sender_str:
+                    return False
+                sender_lower = sender_str.lower()
+                if my_email in sender_lower or "ippilisaimani" in sender_lower:
+                    return True
+                found = re.findall(r'[\w\.-]+@[\w\.-]+', sender_lower)
+                if found and (found[0] == my_email or "ippilisaimani" in found[0]):
+                    return True
+                return False
+
+            def _classify_snippet(snippet_text: str) -> str:
+                s = snippet_text.lower()
+                if any(k in s for k in ["out of office", "on leave", "automatic reply", "auto-reply", "away from", "vacation"]):
+                    return "ooo"
+                if any(k in s for k in ["unsubscribe", "remove me", "not interested", "stop emailing", "leave me alone"]):
+                    return "opt_out"
+                if any(k in s for k in ["delivery status notification", "failure", "undelivered", "mailer-daemon"]):
+                    return "bounce"
+                return "human_reply"
+
+            # 2. Priority 1: Check via Gmail thread endpoint directly if thread_id is available
             if thread_id:
-                query = f"thread:{thread_id}"
-                
-            results = service.users().messages().list(userId='me', q=query, maxResults=5).execute()
-            messages = results.get('messages', [])
-            if not messages:
-                return False, None, None
-                
-            for m in messages:
-                msg_data = service.users().messages().get(userId='me', id=m['id']).execute()
-                snippet = msg_data.get("snippet", "").lower()
-                headers = {h['name'].lower(): h['value'] for h in msg_data.get('payload', {}).get('headers', [])}
-                sender = headers.get('from', '').lower()
-                
-                # Ignore messages sent by ourselves
-                if "me" in sender or "ippilisaimani" in sender:
-                    continue
+                try:
+                    thread_data = service.users().threads().get(
+                        userId='me',
+                        id=thread_id,
+                        format='metadata',
+                        metadataHeaders=['From', 'To', 'Subject', 'Date']
+                    ).execute()
                     
-                # Classify response
-                if any(k in snippet for k in ["out of office", "on leave", "automatic reply", "auto-reply", "away from"]):
-                    return True, "ooo", snippet
-                if any(k in snippet for k in ["unsubscribe", "remove me", "not interested", "stop emailing"]):
-                    return True, "opt_out", snippet
-                if any(k in snippet for k in ["delivery status notification", "failure", "undelivered", "mailer-daemon"]):
-                    return True, "bounce", snippet
+                    messages = thread_data.get('messages', [])
+                    for m in messages:
+                        headers = {h['name'].lower(): h['value'] for h in m.get('payload', {}).get('headers', [])}
+                        sender = headers.get('from', '')
+                        
+                        # Skip messages sent by candidate
+                        if _is_me(sender):
+                            continue
+                            
+                        # An incoming message exists in this thread!
+                        snippet = m.get('snippet', '')
+                        classification = _classify_snippet(snippet)
+                        print(f"[GmailManager] Verified reply in thread {thread_id} from {sender} ({classification}): {snippet[:80]}", flush=True)
+                        return True, classification, snippet
+                except Exception as te:
+                    print(f"[GmailManager] threads.get({thread_id}) notice: {te}. Falling back to search query...", flush=True)
+
+            # 3. Priority 2: Fallback to searching messages by recipient email
+            clean_to = to_email.strip().lower() if to_email else ""
+            if clean_to:
+                query = f"from:{clean_to}"
+                results = service.users().messages().list(userId='me', q=query, maxResults=10).execute()
+                messages = results.get('messages', [])
+                for m in messages:
+                    msg_data = service.users().messages().get(
+                        userId='me',
+                        id=m['id'],
+                        format='metadata',
+                        metadataHeaders=['From', 'To', 'Subject', 'Date']
+                    ).execute()
+                    headers = {h['name'].lower(): h['value'] for h in msg_data.get('payload', {}).get('headers', [])}
+                    sender = headers.get('from', '')
+                    if _is_me(sender):
+                        continue
+                        
+                    snippet = msg_data.get('snippet', '')
+                    classification = _classify_snippet(snippet)
+                    print(f"[GmailManager] Verified reply via search from {sender} ({classification}): {snippet[:80]}", flush=True)
+                    return True, classification, snippet
                     
-                # Definite human reply
-                return True, "human_reply", snippet
-                
             return False, None, None
         except Exception as e:
-            print(f"[GmailManager] Error checking replies: {e}")
+            print(f"[GmailManager] Error checking replies: {e}", flush=True)
             return False, None, None

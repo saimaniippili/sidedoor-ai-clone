@@ -67,8 +67,55 @@ class FollowupService:
             outreach.next_followup_at = None
             
         db.commit()
-        print(f"[FollowupService] Cancelled {count} pending follow-up action(s) for outreach #{outreach_id}")
+        print(f"[FollowupService] Cancelled {count} pending follow-up action(s) for outreach #{outreach_id} (reason: {reason})")
         return count
+
+    @classmethod
+    def reconcile_all_pending_replies(cls, db: Session) -> int:
+        """Proactively checks Gmail for incoming replies across ALL pending scheduled followups,
+        cancelling followups immediately upon reply rather than waiting for due dates.
+        """
+        pending_actions = db.query(ScheduledFollowup).filter(
+            ScheduledFollowup.status == "PENDING"
+        ).all()
+        
+        checked_outreach_ids = set()
+        cancelled_count = 0
+        
+        for act in pending_actions:
+            if act.outreach_id in checked_outreach_ids:
+                continue
+            checked_outreach_ids.add(act.outreach_id)
+            
+            outreach = db.query(Outreach).filter(Outreach.id == act.outreach_id).first()
+            if not outreach:
+                continue
+                
+            opp = db.query(Opportunity).filter(Opportunity.id == outreach.opportunity_id).first()
+            founder = db.query(Founder).filter(Founder.id == opp.founder_id).first() if opp else None
+            if not founder:
+                continue
+                
+            has_reply, classification, snippet = GmailManager.check_for_replies(
+                to_email=founder.email,
+                thread_id=outreach.gmail_thread_id
+            )
+            if has_reply:
+                reason = "replied"
+                if classification == "opt_out":
+                    reason = "opt_out"
+                elif classification == "bounce":
+                    reason = "bounced"
+                    founder.is_suppressed = True
+                    founder.suppression_reason = "hard_bounce"
+                elif classification == "ooo":
+                    reason = "out_of_office"
+                    
+                c = cls.cancel_all_followups(db, outreach.id, reason=reason)
+                cancelled_count += c
+                print(f"[FollowupService] Proactively reconciled reply from {founder.email} ({classification}): cancelled {c} followup(s)", flush=True)
+                
+        return cancelled_count
 
     @classmethod
     async def process_due_followups(cls, db: Session) -> int:
@@ -104,18 +151,23 @@ class FollowupService:
                 thread_id=outreach.gmail_thread_id
             )
             if has_reply:
-                if classification in ["human_reply", "opt_out"]:
-                    cls.cancel_all_followups(db, outreach.id, reason="replied" if classification == "human_reply" else "opt_out")
-                    continue
+                # ANY response received from recipient -> IMMEDIATELY cancel all follow-ups
+                reason = "replied"
+                if classification == "opt_out":
+                    reason = "opt_out"
                 elif classification == "bounce":
-                    cls.cancel_all_followups(db, outreach.id, reason="bounced")
+                    reason = "bounced"
                     founder.is_suppressed = True
                     founder.suppression_reason = "hard_bounce"
-                    db.commit()
-                    continue
+                elif classification == "ooo":
+                    reason = "out_of_office"
+                    
+                cls.cancel_all_followups(db, outreach.id, reason=reason)
+                print(f"[FollowupService] Suppressed follow-up for {founder.email} due to incoming activity ({classification}).")
+                continue
             
             # 2. Check if outreach was skipped, bounced, or suppressed
-            if outreach.status in ["replied", "bounced", "skipped", "cancelled", "completed"]:
+            if outreach.status in ["replied", "bounced", "skipped", "cancelled", "completed", "opt_out", "out_of_office"]:
                 action.status = "CANCELLED"
                 db.commit()
                 continue

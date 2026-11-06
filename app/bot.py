@@ -1,5 +1,30 @@
-PRIMARY_LOCATIONS = ["Hyderabad", "Bangalore", "Chennai"]
-FALLBACK_LOCATIONS = ["Pune", "Delhi NCR", "Mumbai"]
+TARGET_REGIONS = {
+    "netherlands": {
+        "name": "Netherlands 🇳🇱",
+        "primary": ["Amsterdam", "Eindhoven", "Utrecht", "Rotterdam"],
+        "fallback": ["Delft", "Netherlands"],
+        "country_tag": "Netherlands",
+        "banner": "Scouting early-stage AI/ML startups in {location}, Netherlands 🇳🇱...\nTargeting personal founder inboxes across Amsterdam, Eindhoven, Utrecht & Rotterdam with zero-bounce deliverability validation."
+    },
+    "europe": {
+        "name": "Europe 🇪🇺",
+        "primary": ["Amsterdam", "Berlin", "London", "Stockholm"],
+        "fallback": ["Munich", "Dublin", "Zurich", "Paris"],
+        "country_tag": "Europe",
+        "banner": "Scouting early-stage AI/ML startups in {location}, Europe 🇪🇺...\nTargeting founder inboxes across European tech hubs with zero-bounce deliverability validation."
+    },
+    "india": {
+        "name": "India 🇮🇳",
+        "primary": ["Hyderabad", "Bangalore", "Chennai"],
+        "fallback": ["Pune", "Delhi NCR", "Mumbai"],
+        "country_tag": "India",
+        "banner": "Scouting early-stage AI/ML startups in {location}, India 🇮🇳...\nTargeting personal founder inboxes across Hyderabad, Bangalore & Chennai with zero-bounce deliverability validation."
+    }
+}
+DEFAULT_REGION = "netherlands"
+
+PRIMARY_LOCATIONS = TARGET_REGIONS["netherlands"]["primary"]
+FALLBACK_LOCATIONS = TARGET_REGIONS["netherlands"]["fallback"]
 LOCATIONS_LIST = PRIMARY_LOCATIONS + FALLBACK_LOCATIONS
 
 TECH_NICHES = [
@@ -25,7 +50,10 @@ EXA_EXCLUDE_DOMAINS = [
     "moneycontrol.com", "bloomberg.com", "reuters.com", "forbes.com",
     "substack.com", "news18.com", "hindustantimes.com", "ndtv.com",
     "indianexpress.com", "apollo.io", "zoominfo.com", "lusha.com",
-    "rocketreach.co", "gitlab.com", "google.com", "youtube.com"
+    "rocketreach.co", "gitlab.com", "google.com", "youtube.com",
+    "dealroom.co", "techleap.nl", "siliconcanals.com", "sifted.eu",
+    "eutech.org", "computable.nl", "sprout.nl", "dutchstartupjobs.com",
+    "tech.eu", "startupsmagazine.co.uk", "eu-startups.com", "topstartups.io"
 ]
 
 
@@ -214,17 +242,30 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
         except Exception as ghe:
             print(f"[Pipeline] GitHub project integration warning: {ghe}", flush=True)
 
-        # Priority-First Location Selection: Hyderabad -> Bangalore -> Chennai -> Fallback hubs
+        # Geographic Hub Selection: Netherlands (Amsterdam -> Eindhoven -> Utrecht -> Rotterdam) by default, or user preference
+        user_reg_pref = (user.target_location if user and user.target_location else DEFAULT_REGION).lower().strip()
+        if "india" in user_reg_pref:
+            active_region_key = "india"
+        elif "europe" in user_reg_pref:
+            active_region_key = "europe"
+        else:
+            active_region_key = "netherlands"
+            
+        region_info = TARGET_REGIONS[active_region_key]
+        primary_locations = region_info["primary"]
+        fallback_locations = region_info["fallback"]
+        country_tag = region_info["country_tag"]
+
         if location_override:
             location = location_override
         else:
-            # Check which primary location has had the least outreach, prioritizing Hyderabad
-            location = PRIMARY_LOCATIONS[0]
+            location = primary_locations[0]
         
         if attempt_count == 1:
+            banner_text = region_info["banner"].format(location=location)
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"🔍 Scouting early-stage AI/ML startups in {location}...\nTargeting personal founder inboxes across Hyderabad, Bangalore & Chennai with zero-bounce deliverability validation."
+                text=f"🔍 {banner_text}"
             )
         
         import exa_py
@@ -246,7 +287,7 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
         # Dual-Tier Search Strategy with dynamic niches:
         # 1. Founder-Centric: Discovers startups via founder names & personal email contacts
         try:
-            f_query = f"early-stage AI tech startup founders in {location} {niche_1_keywords} official website email"
+            f_query = f"early-stage AI tech startup founders in {location} {country_tag} {niche_1_keywords} official website email"
             f_res = exa.search_and_contents(
                 f_query,
                 type="neural",
@@ -263,7 +304,7 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
 
         # 2. Company-Centric: Discovers innovative early-stage AI product platforms
         try:
-            c_query = f"innovative early-stage AI machine learning tech startups founded in {location} {niche_2_keywords} official product website"
+            c_query = f"innovative early-stage AI machine learning tech startups founded in {location} {country_tag} {niche_2_keywords} official product website"
             c_res = exa.search_and_contents(
                 c_query,
                 type="neural",
@@ -454,19 +495,18 @@ async def run_startup_pipeline(chat_id: str, context: ContextTypes.DEFAULT_TYPE,
                 continue
             
         if not found_match:
-            # Strict Priority Order: Hyderabad -> Bangalore -> Chennai -> (only worst case: Pune, Delhi NCR, Mumbai)
-            full_order = PRIMARY_LOCATIONS + FALLBACK_LOCATIONS
+            full_order = primary_locations + fallback_locations
             curr_idx = full_order.index(location) if location in full_order else 0
             if curr_idx + 1 < len(full_order):
                 next_loc = full_order[curr_idx + 1]
-                tier_label = "Primary Hub" if next_loc in PRIMARY_LOCATIONS else "Fallback State"
+                tier_label = "Primary Hub" if next_loc in primary_locations else "Fallback State"
                 print(f"[Pipeline] Checked {location}; scanning {next_loc} next ({tier_label} {curr_idx + 2}/{len(full_order)})...", flush=True)
                 asyncio.create_task(run_startup_pipeline(chat_id, context, location_override=next_loc, attempt_count=attempt_count + 1))
                 return
             else:
                 breakdown = (
-                    f"Scanned candidate tech startups across prioritized hubs: {', '.join(PRIMARY_LOCATIONS)}.\n\n"
-                    f"All deliverable inboxes in this cycle have been evaluated. Send 'search' anytime to run another scan cycle!"
+                    f"Scanned candidate tech startups across {region_info['name']} hubs: {', '.join(primary_locations)}.\n\n"
+                    f"All deliverable inboxes in this cycle have been evaluated. Send 'search' anytime to run another scan cycle, or /country to switch regions!"
                 )
                 await context.bot.send_message(chat_id=chat_id, text=breakdown)
     except Exception as e:
@@ -719,6 +759,49 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ Error testing key: {e}")
             return
             
+    lower_t = text.lower()
+    if any(k in lower_t for k in ["netherlands", "amsterdam", "eindhoven", "rotterdam", "utrecht"]) and not any(k in lower_t for k in ["http://", "https://", "@"]):
+        db = SessionLocal()
+        try:
+            u = db.query(ActiveUser).filter(ActiveUser.chat_id == chat_id).first()
+            if not u:
+                u = ActiveUser(chat_id=chat_id, target_location="netherlands")
+                db.add(u)
+            else:
+                u.target_location = "netherlands"
+            db.commit()
+        finally:
+            db.close()
+        keyboard = [[InlineKeyboardButton("🔍 Scout Netherlands Startups Now", callback_data="search_now")]]
+        await update.message.reply_text(
+            "🌍 Target Region updated to **Netherlands 🇳🇱**!\n\n"
+            "Now targeting early-stage AI/ML startups across Amsterdam, Eindhoven, Utrecht & Rotterdam.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+        return
+
+    if ("india" in lower_t or "hyderabad" in lower_t or "bangalore" in lower_t) and not any(k in lower_t for k in ["http://", "https://", "@", "search"]):
+        db = SessionLocal()
+        try:
+            u = db.query(ActiveUser).filter(ActiveUser.chat_id == chat_id).first()
+            if not u:
+                u = ActiveUser(chat_id=chat_id, target_location="india")
+                db.add(u)
+            else:
+                u.target_location = "india"
+            db.commit()
+        finally:
+            db.close()
+        keyboard = [[InlineKeyboardButton("🔍 Scout India Startups Now", callback_data="search_now")]]
+        await update.message.reply_text(
+            "🌍 Target Region updated to **India 🇮🇳**!\n\n"
+            "Now targeting startups across Hyderabad, Bangalore & Chennai.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+        return
+
     if text.lower() in ["keep searching", "search", "more"]:
         await update.message.reply_text("Hunting down the next qualified startup... 🔍")
         asyncio.create_task(run_startup_pipeline(chat_id, context, override_limit=True))
@@ -836,7 +919,33 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     db = SessionLocal()
     try:
-        action, outreach_id = data.split("_")
+        if data == "search_now":
+            await query.edit_message_text("Hunting down the next qualified startup... 🔍")
+            asyncio.create_task(run_startup_pipeline(str(query.message.chat_id), context, override_limit=True))
+            return
+
+        if data.startswith("region_"):
+            selected_reg = data.replace("region_", "").strip().lower()
+            user = db.query(ActiveUser).filter(ActiveUser.chat_id == str(query.message.chat_id)).first()
+            if not user:
+                user = ActiveUser(chat_id=str(query.message.chat_id), target_location=selected_reg)
+                db.add(user)
+            else:
+                user.target_location = selected_reg
+            db.commit()
+            
+            reg_meta = TARGET_REGIONS.get(selected_reg, TARGET_REGIONS["netherlands"])
+            keyboard = [[InlineKeyboardButton(f"🔍 Scout {reg_meta['name']} Now", callback_data="search_now")]]
+            await query.edit_message_text(
+                f"🌍 Target Region updated to **{reg_meta['name']}**!\n\n"
+                f"Primary hubs: {', '.join(reg_meta['primary'])}\n\n"
+                f"Send `search` to scout immediately!",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="Markdown"
+            )
+            return
+
+        action, outreach_id = data.split("_", 1)
         outreach = db.query(Outreach).filter(Outreach.id == int(outreach_id)).first()
         if not outreach:
             await query.edit_message_text("Draft not found.")
@@ -918,14 +1027,17 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- Background Scheduled Jobs ---
 async def periodic_followup_job(context: ContextTypes.DEFAULT_TYPE):
-    """Background task running every hour to dispatch due follow-ups and check replies."""
+    """Background task running every hour to dispatch due follow-ups and proactively reconcile replies."""
     db = SessionLocal()
     try:
+        reconciled = FollowupService.reconcile_all_pending_replies(db)
+        if reconciled > 0:
+            print(f"[Scheduled Job] Proactively cancelled {reconciled} follow-up(s) due to detected recipient replies.", flush=True)
         sent = await FollowupService.process_due_followups(db)
         if sent > 0:
-            print(f"[Scheduled Job] Successfully delivered {sent} automated follow-up email(s).")
+            print(f"[Scheduled Job] Successfully delivered {sent} automated follow-up email(s).", flush=True)
     except Exception as e:
-        print(f"[Scheduled Job Error]: {e}")
+        print(f"[Scheduled Job Error]: {e}", flush=True)
     finally:
         db.close()
 
@@ -986,6 +1098,62 @@ async def handle_pending_command(update: Update, context: ContextTypes.DEFAULT_T
         db.close()
 
 
+
+async def handle_target_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Allows user to inspect or switch active scouting region between Netherlands, Europe, and India."""
+    chat_id = str(update.message.chat_id)
+    args = context.args
+    db = SessionLocal()
+    try:
+        user = db.query(ActiveUser).filter(ActiveUser.chat_id == chat_id).first()
+        current_loc = (user.target_location if user and user.target_location else DEFAULT_REGION).lower()
+        
+        if args:
+            choice = " ".join(args).strip().lower()
+            if "india" in choice:
+                new_reg = "india"
+            elif "europe" in choice:
+                new_reg = "europe"
+            else:
+                new_reg = "netherlands"
+                
+            if not user:
+                user = ActiveUser(chat_id=chat_id, target_location=new_reg)
+                db.add(user)
+            else:
+                user.target_location = new_reg
+            db.commit()
+            
+            reg_meta = TARGET_REGIONS[new_reg]
+            keyboard = [[InlineKeyboardButton(f"🔍 Scout {reg_meta['name']} Now", callback_data="search_now")]]
+            await update.message.reply_text(
+                f"🌍 Target Region updated to **{reg_meta['name']}**!\n\n"
+                f"Primary hubs: {', '.join(reg_meta['primary'])}\n"
+                f"Zero-bounce deliverability validation active.",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="Markdown"
+            )
+            return
+            
+        curr_label = TARGET_REGIONS.get(current_loc, TARGET_REGIONS["netherlands"])["name"]
+        keyboard = [
+            [
+                InlineKeyboardButton("🇳🇱 Netherlands", callback_data="region_netherlands"),
+                InlineKeyboardButton("🇪🇺 All Europe", callback_data="region_europe"),
+            ],
+            [
+                InlineKeyboardButton("🇮🇳 India", callback_data="region_india"),
+            ]
+        ]
+        await update.message.reply_text(
+            f"📍 **Current Target Region:** {curr_label}\n\n"
+            f"Select a geographic hub to focus startup discovery:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+    finally:
+        db.close()
+
 async def handle_draft_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.message.chat_id)
     args = context.args
@@ -1018,6 +1186,9 @@ def main():
     app.add_handler(CommandHandler("drafts", handle_pending_command))
     app.add_handler(CommandHandler("search", handle_search_command))
     app.add_handler(CommandHandler("draft", handle_draft_command))
+    app.add_handler(CommandHandler("country", handle_target_command))
+    app.add_handler(CommandHandler("target", handle_target_command))
+    app.add_handler(CommandHandler("location", handle_target_command))
     app.add_handler(MessageHandler(filters.Document.PDF, handle_resume))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(button_callback))
